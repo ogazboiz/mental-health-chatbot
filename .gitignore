@@ -53,7 +53,7 @@ users/
 Thumbs.db
 
 
-intent_model/
+
 *.pt
 *.safetensors
 *.zip
