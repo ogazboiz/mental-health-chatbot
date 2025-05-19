@@ -1,0 +1,23 @@
+mental-health-chatbot/
+├── .env                     # Environment variables (not tracked by Git)
+├── .gitignore               # Git ignore file
+├── README.md                # Project documentation
+├── requirements.txt         # Package dependencies
+├── config.py                # Configuration settings
+├── render_config.py         # Render-specific configuration
+├── wsgi.py                  # WSGI entry point for production
+├── fixed_swagger_app.py     # Main application with Swagger
+├── swagger_config.py        # Swagger documentation configuration
+├── render.yaml              # Render deployment configuration
+├── Dockerfile               # Docker configuration (optional)
+├── docker-compose.yml       # Docker Compose configuration (optional)
+├── modules/                 # Application modules
+│   ├── __init__.py
+│   ├── conversation.py      # Enhanced conversation class
+│   ├── user_auth.py         # User authentication
+│   ├── nlp_processor.py     # NLP processing
+│   ├── mental_health_response_generator.py
+│   ├── safety_checker.py    # Content safety checker
+│   └── mental_health_filter.py  # Mental health topic filter
+├── sessions/                # Session storage (not tracked by Git)
+└── users/                   # User data storage (not tracked by Git)
