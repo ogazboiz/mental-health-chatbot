@@ -1,0 +1,92 @@
+services:
+  # Main web service
+  - type: web
+    name: mental-health-chatbot-api
+    env: python
+    plan: standard  # Required for ML dependencies
+    buildCommand: |
+      pip install --upgrade pip
+      pip install --timeout=1000 --no-cache-dir -r requirements.txt
+      python setup_nltk.py
+      python app_init.py
+      python -c "import spacy; spacy.info()"
+      echo "Build and initialization completed successfully"
+    startCommand: gunicorn --bind 0.0.0.0:$PORT app:app --worker-class uvicorn.workers.UvicornWorker --workers 1 --timeout 300 --preload --max-requests 1000 --max-requests-jitter 100
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      - key: PORT
+        value: 10000
+      - key: DEBUG
+        value: false
+      - key: ENABLE_SAFETY_FILTER
+        value: true
+      - key: ENABLE_MENTAL_HEALTH_FILTER
+        value: true
+      - key: MAX_CONTEXT_MESSAGES
+        value: 10
+      - key: MAX_CONVERSATION_LENGTH
+        value: 100
+      - key: CONTEXT_WINDOW
+        value: 10
+      - key: SESSION_EXPIRY_MINUTES
+        value: 30
+      - key: TOKEN_EXPIRY_HOURS
+        value: 24
+      - key: SECURE_COOKIES
+        value: true
+      - key: CORS_ORIGINS
+        value: "*"
+      - key: PREFER_GEMINI
+        value: true
+      - key: USE_OPENAI_FALLBACK
+        value: true
+      - key: ENABLE_GEMINI_DIRECT
+        value: true
+      - key: ENABLE_GEMINI_LIBRARY
+        value: true
+      - key: ENABLE_OPENAI
+        value: true
+      - key: ENABLE_BUILTIN_RESPONSES
+        value: true
+      - key: LOG_LEVEL
+        value: INFO
+      - key: RATE_LIMIT_PER_MINUTE
+        value: 60
+      - key: RATE_LIMIT_PER_HOUR
+        value: 1000
+      # NLTK data path
+      - key: NLTK_DATA
+        value: /opt/render/project/src/nltk_data
+      # Database will be auto-injected by Render if you create a PostgreSQL service
+      - key: DATABASE_URL
+        fromDatabase:
+          name: mental-health-chatbot-db
+          property: connectionString
+      # These need to be set manually in Render dashboard for security
+      - key: SECRET_KEY
+        sync: false  # Set this manually for security
+      - key: ENCRYPTION_KEY
+        sync: false  # Set this manually for security (or use your existing one)
+      - key: GEMINI_API_KEY
+        sync: false  # Set this manually
+      - key: OPENAI_API_KEY
+        sync: false  # Set this manually
+      - key: HF_API_KEY
+        sync: false  # Set this manually
+      - key: HUGGINGFACE_API_KEY
+        sync: false  # Set this manually
+
+  # PostgreSQL database
+  - type: pgsql
+    name: mental-health-chatbot-db
+    plan: starter  # Can upgrade based on usage
+    databaseName: chatbot_db
+    user: chatbot_user
+    ipAllowList: []  # Empty means allow from anywhere
+
+  # Redis for session storage (optional but recommended for scaling)
+  - type: redis
+    name: mental-health-chatbot-redis
+    plan: starter
+    ipAllowList: []
