@@ -885,8 +885,8 @@ async def _async_chat():
 asgi_app = WsgiToAsgi(app)
 
 if __name__ == '__main__':
-    # Get port from environment variable (Render sets this)
-    port = int(os.environ.get('PORT', Config.PORT))
+    # Get port from environment variable (Render sets this to 10000)
+    port = int(os.environ.get('PORT', 10000))  # Use 10000 as fallback
     
     print(f"🚀 Starting Mental Health Chatbot on port {port}")
     print(f"💚 Health check at: http://localhost:{port}/health")
