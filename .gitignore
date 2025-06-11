@@ -41,7 +41,7 @@ chatbot.log
 # Application specific data
 sessions/
 users/
-
+intent_model/
 # IDE and editor files
 .idea/
 .vscode/
@@ -51,7 +51,7 @@ users/
 # OS specific files
 .DS_Store
 Thumbs.db
-
+intent_dataset.json
 
 
 *.pt
