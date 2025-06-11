@@ -7,8 +7,9 @@ load_dotenv()
 
 class Config:
     """Configuration class for mental health chatbot settings."""
-    # Server settings
-    PORT = int(os.getenv("PORT", 10000))
+    
+    # Server settings - PORT is automatically set by Render
+    PORT = int(os.getenv("PORT", 5000))  # Default for local development
     
     # Security settings
     ENCRYPTION_KEY = os.getenv("ENCRYPTION_KEY", 'gKrIjy-esAkcFlwKR3z73gsCcxWOSaRMQzrHDkCVOL0=')
