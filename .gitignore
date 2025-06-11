@@ -55,6 +55,6 @@ Thumbs.db
 
 
 *.pt
-
+*.safetensors
 *.zip
  

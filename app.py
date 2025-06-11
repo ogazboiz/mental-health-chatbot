@@ -15,6 +15,16 @@ import torch
 from asgiref.wsgi import WsgiToAsgi
 from asgiref.sync import async_to_sync
 from functools import wraps
+from flask_restx import Api, Resource, fields, Namespace, Blueprint
+
+# Setup NLTK first before other imports
+print("Setting up NLTK data...")
+try:
+    import setup_nltk
+    setup_nltk.setup_nltk_data()
+    print("✅ NLTK setup completed")
+except Exception as e:
+    print(f"⚠️ NLTK setup failed: {e}")
 
 # Enforce WindowsSelectorEventLoopPolicy before any asyncio operations
 if os.name == "nt":
@@ -22,22 +32,119 @@ if os.name == "nt":
 
 # Setup logging
 logging.basicConfig(
-    filename='chatbot.log',
-    level=logging.DEBUG,
+    level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
-logging.getLogger('').handlers = []
-logging.getLogger('').addHandler(logging.FileHandler('chatbot.log'))
+
 # Also log to console for development
 console_handler = logging.StreamHandler()
 console_handler.setLevel(logging.INFO)
 logging.getLogger('').addHandler(console_handler)
 
 app = Flask(__name__)
-nlp_processor = NLPProcessor()
-response_generator = MentalHealthResponseGenerator()
-safety_checker = SafetyChecker()
-mental_health_filter = MentalHealthFilter()
+
+# Initialize Swagger documentation
+api_bp = Blueprint('api', __name__)
+
+authorizations = {
+    'Bearer': {
+        'type': 'apiKey',
+        'in': 'header',
+        'name': 'Authorization',
+        'description': 'Enter: **Bearer &lt;token&gt;**'
+    }
+}
+
+api = Api(
+    api_bp,
+    version='1.0',
+    title='Mental Health Chatbot API',
+    description='API documentation for the Mental Health Chatbot',
+    doc='/swagger',
+    authorizations=authorizations,
+    security='Bearer'
+)
+
+# Create namespaces for different endpoint groups
+auth_ns = api.namespace('api/auth', description='Authentication operations')
+user_ns = api.namespace('api/user', description='User profile operations')
+sessions_ns = api.namespace('api/sessions', description='Chat session operations')
+legacy_ns = api.namespace('legacy', description='Legacy endpoints')
+
+# Define models for request/response schemas
+register_model = api.model('Register', {
+    'username': fields.String(required=True, description='Username'),
+    'email': fields.String(required=True, description='Email address'),
+    'password': fields.String(required=True, description='Password')
+})
+
+login_model = api.model('Login', {
+    'username': fields.String(required=True, description='Username'),
+    'password': fields.String(required=True, description='Password')
+})
+
+auth_response = api.model('AuthResponse', {
+    'message': fields.String(description='Status message'),
+    'user_id': fields.String(description='User ID'),
+    'username': fields.String(description='Username'),
+    'email': fields.String(description='Email address'),
+    'token': fields.String(description='Authentication token')
+})
+
+profile_data = api.model('ProfileData', {
+    'name': fields.String(description='User name'),
+    'age': fields.Integer(description='User age'),
+    'preferred_responses': fields.String(description='Response style preference'),
+    'theme': fields.String(description='UI theme preference'),
+    'notification_preferences': fields.Raw(description='Notification settings')
+})
+
+profile_update = api.model('ProfileUpdate', {
+    'profile': fields.Nested(profile_data)
+})
+
+session_create = api.model('SessionCreate', {
+    'title': fields.String(description='Chat session title')
+})
+
+message_send = api.model('MessageSend', {
+    'message': fields.String(required=True, description='Message content')
+})
+
+chat_model = api.model('Chat', {
+    'message': fields.String(required=True, description='User message'),
+    'session_id': fields.String(description='Session ID')
+})
+
+consent_model = api.model('Consent', {
+    'session_id': fields.String(description='Session ID'),
+    'consent': fields.Boolean(required=True, description='Consent flag')
+})
+
+feedback_model = api.model('Feedback', {
+    'session_id': fields.String(required=True, description='Session ID'),
+    'satisfaction': fields.Integer(required=True, min=1, max=5, description='Satisfaction score (1-5)'),
+    'comments': fields.String(description='Feedback comments')
+})
+
+# Register the blueprint
+app.register_blueprint(api_bp)
+
+# Initialize components
+print("Initializing chatbot components...")
+try:
+    nlp_processor = NLPProcessor()
+    response_generator = MentalHealthResponseGenerator()
+    safety_checker = SafetyChecker()
+    mental_health_filter = MentalHealthFilter()
+    print("✅ All components initialized successfully")
+except Exception as e:
+    print(f"❌ Failed to initialize components: {e}")
+    # Create simple fallback components
+    nlp_processor = None
+    response_generator = None
+    safety_checker = None
+    mental_health_filter = None
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 logging.info(f"Device set to use {device}")
@@ -83,308 +190,338 @@ def token_required(f):
     return decorated
 
 # User Authentication Endpoints
-@app.route('/api/auth/register', methods=['POST'])
-def register():
-    """Register a new user"""
-    try:
-        data = request.get_json()
-        username = data.get('username')
-        email = data.get('email')
-        password = data.get('password')
-        
-        if not username or not email or not password:
-            return jsonify({"error": "Username, email, and password are required"}), 400
+@auth_ns.route('/register')
+class Register(Resource):
+    @auth_ns.doc('register_user')
+    @auth_ns.expect(register_model)
+    @auth_ns.response(200, 'Success', auth_response)
+    @auth_ns.response(400, 'Validation Error')
+    @auth_ns.response(409, 'Username already exists')
+    def post(self):
+        """Register a new user"""
+        try:
+            data = request.get_json()
+            username = data.get('username')
+            email = data.get('email')
+            password = data.get('password')
             
-        # Validate password strength
-        if len(password) < 8:
-            return jsonify({"error": "Password must be at least 8 characters long"}), 400
+            if not username or not email or not password:
+                return jsonify({"error": "Username, email, and password are required"}), 400
+                
+            # Validate password strength
+            if len(password) < 8:
+                return jsonify({"error": "Password must be at least 8 characters long"}), 400
+                
+            # Create new user
+            user = User()
+            if not user.create_user(username, email, password):
+                return jsonify({"error": "Username already exists"}), 409
+                
+            # Generate authentication token
+            token = AuthToken.generate_token(user.user_id)
             
-        # Create new user
-        user = User()
-        if not user.create_user(username, email, password):
-            return jsonify({"error": "Username already exists"}), 409
+            # Return token with user information
+            response = make_response(jsonify({
+                "message": "User registered successfully",
+                "user_id": user.user_id,
+                "username": user.username,
+                "email": user.email,
+                "token": token
+            }))
             
-        # Generate authentication token
-        token = AuthToken.generate_token(user.user_id)
-        
-        # Return token with user information
-        response = make_response(jsonify({
-            "message": "User registered successfully",
-            "user_id": user.user_id,
-            "username": user.username,
-            "email": user.email,
-            "token": token
-        }))
-        
-        # Set token cookie
-        response.set_cookie(
-            'token', 
-            token, 
-            httponly=True, 
-            max_age=Config.TOKEN_EXPIRY_HOURS * 3600,
-            secure=Config.SECURE_COOKIES
-        )
-        
+            # Set token cookie
+            response.set_cookie(
+                'token', 
+                token, 
+                httponly=True, 
+                max_age=Config.TOKEN_EXPIRY_HOURS * 3600,
+                secure=Config.SECURE_COOKIES
+            )
+            
+            return response
+            
+        except Exception as e:
+            logging.error(f"Registration error: {str(e)}")
+            return jsonify({"error": f"Server error: {str(e)}"}), 500
+
+@auth_ns.route('/login')
+class Login(Resource):
+    @auth_ns.doc('login_user')
+    @auth_ns.expect(login_model)
+    @auth_ns.response(200, 'Success', auth_response)
+    @auth_ns.response(401, 'Invalid credentials')
+    def post(self):
+        """Login a user"""
+        try:
+            data = request.get_json()
+            username = data.get('username')
+            password = data.get('password')
+            
+            if not username or not password:
+                return jsonify({"error": "Username and password are required"}), 400
+                
+            # Authenticate user
+            user = User()
+            if not user.authenticate(username, password):
+                return jsonify({"error": "Invalid username or password"}), 401
+                
+            # Generate authentication token
+            token = AuthToken.generate_token(user.user_id)
+            
+            # Return token with user information
+            response = make_response(jsonify({
+                "message": "Login successful",
+                "user_id": user.user_id,
+                "username": user.username,
+                "email": user.email,
+                "token": token
+            }))
+            
+            # Set token cookie
+            response.set_cookie(
+                'token', 
+                token, 
+                httponly=True, 
+                max_age=Config.TOKEN_EXPIRY_HOURS * 3600,
+                secure=Config.SECURE_COOKIES
+            )
+            
+            return response
+            
+        except Exception as e:
+            logging.error(f"Login error: {str(e)}")
+            return jsonify({"error": f"Server error: {str(e)}"}), 500
+
+@auth_ns.route('/logout')
+class Logout(Resource):
+    @auth_ns.doc('logout_user')
+    @auth_ns.response(200, 'Success')
+    def post(self):
+        """Logout a user by clearing the token cookie"""
+        response = make_response(jsonify({"message": "Logout successful"}))
+        response.delete_cookie('token')
         return response
-        
-    except Exception as e:
-        logging.error(f"Registration error: {str(e)}")
-        return jsonify({"error": f"Server error: {str(e)}"}), 500
-
-@app.route('/api/auth/login', methods=['POST'])
-def login():
-    """Login a user"""
-    try:
-        data = request.get_json()
-        username = data.get('username')
-        password = data.get('password')
-        
-        if not username or not password:
-            return jsonify({"error": "Username and password are required"}), 400
-            
-        # Authenticate user
-        user = User()
-        if not user.authenticate(username, password):
-            return jsonify({"error": "Invalid username or password"}), 401
-            
-        # Generate authentication token
-        token = AuthToken.generate_token(user.user_id)
-        
-        # Return token with user information
-        response = make_response(jsonify({
-            "message": "Login successful",
-            "user_id": user.user_id,
-            "username": user.username,
-            "email": user.email,
-            "token": token
-        }))
-        
-        # Set token cookie
-        response.set_cookie(
-            'token', 
-            token, 
-            httponly=True, 
-            max_age=Config.TOKEN_EXPIRY_HOURS * 3600,
-            secure=Config.SECURE_COOKIES
-        )
-        
-        return response
-        
-    except Exception as e:
-        logging.error(f"Login error: {str(e)}")
-        return jsonify({"error": f"Server error: {str(e)}"}), 500
-
-@app.route('/api/auth/logout', methods=['POST'])
-def logout():
-    """Logout a user by clearing the token cookie"""
-    response = make_response(jsonify({"message": "Logout successful"}))
-    response.delete_cookie('token')
-    return response
-
-@app.route('/api/auth/refresh', methods=['POST'])
-@token_required
-def refresh_token(user):
-    """Refresh authentication token"""
-    # Generate a new token
-    token = AuthToken.generate_token(user.user_id)
-    
-    # Return new token
-    response = make_response(jsonify({
-        "message": "Token refreshed",
-        "token": token
-    }))
-    
-    # Set token cookie
-    response.set_cookie(
-        'token', 
-        token, 
-        httponly=True, 
-        max_age=Config.TOKEN_EXPIRY_HOURS * 3600,
-        secure=Config.SECURE_COOKIES
-    )
-    
-    return response
 
 # User Profile Endpoints
-@app.route('/api/user/profile', methods=['GET'])
-@token_required
-def get_profile(user):
-    """Get user profile"""
-    return jsonify({
-        "user_id": user.user_id,
-        "username": user.username,
-        "email": user.email,
-        "profile": user.profile,
-        "created_at": user.created_at,
-        "last_login": user.last_login
-    })
-
-@app.route('/api/user/profile', methods=['PUT'])
-@token_required
-def update_profile(user):
-    """Update user profile"""
-    try:
-        data = request.get_json()
-        profile_data = data.get('profile', {})
-        
-        # Update profile
-        if user.update_profile(profile_data):
-            return jsonify({
-                "message": "Profile updated successfully",
-                "profile": user.profile
-            })
-        else:
-            return jsonify({"error": "Failed to update profile"}), 500
-            
-    except Exception as e:
-        logging.error(f"Profile update error: {str(e)}")
-        return jsonify({"error": f"Server error: {str(e)}"}), 500
+@user_ns.route('/profile')
+class UserProfile(Resource):
+    @user_ns.doc('get_user_profile', security='Bearer')
+    @user_ns.response(200, 'Success')
+    @user_ns.response(401, 'Authentication Error')
+    @token_required
+    def get(self, user):
+        """Get user profile"""
+        return jsonify({
+            "user_id": user.user_id,
+            "username": user.username,
+            "email": user.email,
+            "profile": user.profile,
+            "created_at": user.created_at,
+            "last_login": user.last_login
+        })
 
 # Chat Session Management Endpoints
-@app.route('/api/sessions', methods=['GET'])
-@token_required
-def get_sessions(user):
-    """Get all chat sessions for a user"""
-    sessions = user.get_all_sessions()
-    return jsonify({
-        "sessions": sessions,
-        "count": len(sessions)
-    })
-
-@app.route('/api/sessions', methods=['POST'])
-@token_required
-def create_session(user):
-    """Create a new chat session"""
-    try:
-        data = request.get_json()
-        title = data.get('title', 'New Conversation')
-        
-        # Create a new conversation
-        conversation = Conversation(Config.ENCRYPTION_KEY)
-        conversation.set_user_id(user.user_id)
-        conversation.set_title(title)
-        conversation.set_consent(True)  # Auto-consent for logged in users
-        
-        # Add welcome message
-        welcome_msg = f"Hello! I'm NeuralEase, a mental health support chatbot. How can I help you today?"
-        conversation.add_message("system", welcome_msg, {"source": "welcome", "model": "builtin"})
-        
-        # Save the conversation
-        conversation.save_session()
-        
-        # Add session to user's sessions
-        user.add_session(conversation.session_id)
-        
+@sessions_ns.route('/')
+class Sessions(Resource):
+    @sessions_ns.doc('get_sessions', security='Bearer')
+    @sessions_ns.response(200, 'Success')
+    @sessions_ns.response(401, 'Authentication Error')
+    @token_required
+    def get(self, user):
+        """Get all chat sessions for a user"""
+        sessions = user.get_all_sessions()
         return jsonify({
-            "message": "Chat session created",
-            "session_id": conversation.session_id,
-            "title": conversation.title
+            "sessions": sessions,
+            "count": len(sessions)
         })
-        
-    except Exception as e:
-        logging.error(f"Session creation error: {str(e)}")
-        return jsonify({"error": f"Server error: {str(e)}"}), 500
+    
+    @sessions_ns.doc('create_session', security='Bearer')
+    @sessions_ns.expect(session_create)
+    @sessions_ns.response(200, 'Success')
+    @sessions_ns.response(401, 'Authentication Error')
+    @token_required
+    def post(self, user):
+        """Create a new chat session"""
+        try:
+            data = request.get_json()
+            title = data.get('title', 'New Conversation')
+            
+            # Create a new conversation
+            conversation = Conversation(Config.ENCRYPTION_KEY)
+            conversation.set_user_id(user.user_id)
+            conversation.set_title(title)
+            conversation.set_consent(True)  # Auto-consent for logged in users
+            
+            # Add welcome message
+            welcome_msg = f"Hello! I'm NeuralEase, a mental health support chatbot. How can I help you today?"
+            conversation.add_message("system", welcome_msg, {"source": "welcome", "model": "builtin"})
+            
+            # Save the conversation
+            conversation.save_session()
+            
+            # Add session to user's sessions
+            user.add_session(conversation.session_id)
+            
+            return jsonify({
+                "message": "Chat session created",
+                "session_id": conversation.session_id,
+                "title": conversation.title
+            })
+            
+        except Exception as e:
+            logging.error(f"Session creation error: {str(e)}")
+            return jsonify({"error": f"Server error: {str(e)}"}), 500
 
-@app.route('/api/sessions/<session_id>', methods=['GET'])
-@token_required
-def get_session(user, session_id):
-    """Get a specific chat session"""
-    try:
-        # Check if session belongs to user
-        if session_id not in user.sessions:
-            return jsonify({"error": "Session not found"}), 404
-            
-        # Load the session
-        conversation = Conversation(Config.ENCRYPTION_KEY)
-        if not conversation.load_session(session_id):
-            return jsonify({"error": "Failed to load session"}), 500
-            
-        # Return session data
-        return jsonify({
-            "session_id": conversation.session_id,
-            "title": conversation.title,
-            "created_at": conversation.created_at,
-            "last_interaction": conversation.last_interaction,
-            "messages": conversation.messages,
-            "user_profile": conversation.user_profile
-        })
-        
-    except Exception as e:
-        logging.error(f"Get session error: {str(e)}")
-        return jsonify({"error": f"Server error: {str(e)}"}), 500
+@sessions_ns.route('/<string:session_id>/messages')
+class SessionMessages(Resource):
+    @sessions_ns.doc('send_message', security='Bearer')
+    @sessions_ns.expect(message_send)
+    @sessions_ns.response(200, 'Success')
+    @sessions_ns.response(401, 'Authentication Error')
+    @sessions_ns.response(404, 'Session not found')
+    @token_required
+    def post(self, user, session_id):
+        """Send a message to a chat session"""
+        # Use async_to_sync to run the async function properly
+        return async_to_sync(_async_send_message)(user, session_id)
 
-@app.route('/api/sessions/<session_id>', methods=['PUT'])
-@token_required
-def update_session(user, session_id):
-    """Update a chat session (rename)"""
-    try:
-        # Check if session belongs to user
-        if session_id not in user.sessions:
-            return jsonify({"error": "Session not found"}), 404
+# Legacy Endpoints (for backward compatibility)
+@legacy_ns.route('/consent')
+class Consent(Resource):
+    @legacy_ns.doc('set_consent')
+    @legacy_ns.expect(consent_model)
+    @legacy_ns.response(200, 'Success')
+    @legacy_ns.response(400, 'Bad Request')
+    def post(self):
+        """Set user consent for data storage"""
+        try:
+            data = request.get_json()
+            session_id = data.get('session_id', '')
+            consent = data.get('consent', False)
             
-        data = request.get_json()
-        title = data.get('title')
-        
-        if not title:
-            return jsonify({"error": "Title is required"}), 400
+            conversation = Conversation(Config.ENCRYPTION_KEY)
+            if session_id:
+                if not conversation.load_session(session_id):
+                    logging.warning(f"Invalid session ID: {session_id}")
+                    return jsonify({"error": "Invalid session ID", "session_id": session_id}), 400
+            else:
+                session_id = conversation.session_id
             
-        # Load the session
-        conversation = Conversation(Config.ENCRYPTION_KEY)
-        if not conversation.load_session(session_id):
-            return jsonify({"error": "Failed to load session"}), 500
+            conversation.set_consent(consent)
+            conversation.save_session()
             
-        # Update title
-        conversation.set_title(title)
-        conversation.save_session()
-        
-        return jsonify({
-            "message": "Session updated",
-            "session_id": session_id,
-            "title": title
-        })
-        
-    except Exception as e:
-        logging.error(f"Update session error: {str(e)}")
-        return jsonify({"error": f"Server error: {str(e)}"}), 500
+            logging.info(f"Audit: Consent set to {consent} for session {session_id}")
+            return jsonify({
+                "message": "Consent updated",
+                "session_id": session_id,
+                "consent": consent
+            })
+        except Exception as e:
+            logging.error(f"Consent endpoint error: {str(e)}")
+            return jsonify({"error": f"Server error: {str(e)}"}), 500
 
-@app.route('/api/sessions/<session_id>', methods=['DELETE'])
-@token_required
-def delete_session(user, session_id):
-    """Delete a chat session"""
-    try:
-        # Check if session belongs to user
-        if session_id not in user.sessions:
-            return jsonify({"error": "Session not found"}), 404
-            
-        # Load the session
-        conversation = Conversation(Config.ENCRYPTION_KEY)
-        if not conversation.load_session(session_id):
-            return jsonify({"error": "Failed to load session"}), 500
-            
-        # Mark as deleted
-        conversation.mark_deleted()
-        
-        # Remove from user's sessions
-        user.remove_session(session_id)
-        
-        return jsonify({
-            "message": "Session deleted",
-            "session_id": session_id
-        })
-        
-    except Exception as e:
-        logging.error(f"Delete session error: {str(e)}")
-        return jsonify({"error": f"Server error: {str(e)}"}), 500
+@legacy_ns.route('/feedback')
+class Feedback(Resource):
+    @legacy_ns.doc('submit_feedback')
+    @legacy_ns.expect(feedback_model)
+    @legacy_ns.response(200, 'Success')
+    @legacy_ns.response(400, 'Bad Request')
+    def post(self):
+        """Submit feedback about a chat session"""
+        try:
+            data = request.get_json()
+            session_id = data.get('session_id', '')
+            satisfaction = data.get('satisfaction', None)
+            comments = data.get('comments', '')
 
-# Message Management Endpoints
-@app.route('/api/sessions/<session_id>/messages', methods=['POST'])
-@token_required
-def send_message(user, session_id):
-    """Send a message to a chat session"""
-    # Use async_to_sync to run the async function properly
-    return async_to_sync(_async_send_message)(user, session_id)
+            if not session_id or satisfaction is None:
+                logging.warning(f"Invalid feedback request: session_id={session_id}, satisfaction={satisfaction}")
+                return jsonify({"error": "Session ID and satisfaction score required"}), 400
 
-# Async implementation moved to a separate function
+            if not isinstance(satisfaction, int) or satisfaction < 1 or satisfaction > 5:
+                logging.warning(f"Invalid satisfaction score: {satisfaction}")
+                return jsonify({"error": "Satisfaction must be an integer between 1 and 5"}), 400
+
+            conversation = Conversation(Config.ENCRYPTION_KEY)
+            if not conversation.load_session(session_id):
+                logging.warning(f"Invalid session ID for feedback: {session_id}")
+                return jsonify({"error": "Invalid session ID", "session_id": session_id}), 400
+
+            logging.info(f"Audit: Feedback received for session {session_id}: satisfaction={satisfaction}, comments={comments}")
+            return jsonify({
+                "message": "Feedback recorded",
+                "session_id": session_id,
+                "satisfaction": satisfaction,
+                "comments": comments
+            })
+        except Exception as e:
+            logging.error(f"Feedback endpoint error: {str(e)}")
+            return jsonify({"error": f"Server error: {str(e)}"}), 500
+
+@legacy_ns.route('/chat')
+class LegacyChat(Resource):
+    @legacy_ns.doc('chat')
+    @legacy_ns.expect(chat_model)
+    @legacy_ns.response(200, 'Success')
+    @legacy_ns.response(400, 'Bad Request')
+    @legacy_ns.response(403, 'Consent Required')
+    def post(self):
+        """Legacy chat endpoint for backward compatibility"""
+        return async_to_sync(_async_chat)()
+
+@legacy_ns.route('/status')
+class Status(Resource):
+    @legacy_ns.doc('get_status')
+    @legacy_ns.response(200, 'Success')
+    def get(self):
+        """Get API status and component health"""
+        status = {
+            "status": "operational",
+            "timestamp": datetime.now().isoformat(),
+            "components": {
+                "nlp_processor": "available" if nlp_processor else "unavailable",
+                "response_generator": "available" if response_generator else "unavailable",
+                "safety_checker": "available" if safety_checker else "unavailable",
+                "mental_health_filter": "available" if mental_health_filter else "unavailable"
+            }
+        }
+        
+        if response_generator:
+            # Check AI API status
+            if hasattr(response_generator, 'gemini_api_key') and response_generator.gemini_api_key:
+                status["components"]["gemini_api"] = "configured"
+            else:
+                status["components"]["gemini_api"] = "not configured"
+            
+            if hasattr(response_generator, 'openai_client') and response_generator.openai_client:
+                status["components"]["openai_api"] = "available"
+            else:
+                status["components"]["openai_api"] = "unavailable"
+        
+        return status
+
+# Simple fallback response function
+def get_fallback_response(intent, user_input):
+    """Simple fallback when AI components are unavailable"""
+    fallback_responses = {
+        "greeting": "Hello! I'm NeuralEase, here to support you with mental health concerns. How are you feeling today?",
+        "emotional_support": "I hear that you're going through a difficult time. Your feelings are valid, and you're not alone. Would you like to talk more about what you're experiencing?",
+        "crisis": "I'm concerned about your wellbeing. If you're in crisis, please call 988 for immediate support from the Suicide & Crisis Lifeline. They're available 24/7.",
+        "default": "I'm here to listen and support you with mental health concerns. Could you tell me a bit more about how you're feeling or what's on your mind?"
+    }
+    
+    # Simple keyword-based intent detection
+    user_lower = user_input.lower()
+    if any(word in user_lower for word in ["hello", "hi", "hey"]):
+        return fallback_responses["greeting"]
+    elif any(word in user_lower for word in ["suicide", "kill myself", "end my life"]):
+        return fallback_responses["crisis"]
+    elif any(word in user_lower for word in ["sad", "depressed", "anxious", "stressed"]):
+        return fallback_responses["emotional_support"]
+    else:
+        return fallback_responses["default"]
+
+# Async implementation functions
 async def _async_send_message(user, session_id):
     """Async implementation of send_message"""
     start_time = datetime.now()
@@ -405,6 +542,24 @@ async def _async_send_message(user, session_id):
             return jsonify({"error": "Failed to load session"}), 500
             
         logging.debug(f"Session {session_id}: Received input: {user_input}")
+
+        # Use fallback if components are not available
+        if not all([nlp_processor, response_generator, safety_checker, mental_health_filter]):
+            logging.warning("Using fallback mode - some components unavailable")
+            response = get_fallback_response("default", user_input)
+            
+            # Add basic metadata
+            analysis = {"intent": {"intent": "general"}, "sentiment": {"label": "neutral"}, "emotions": "none"}
+            conversation.add_message("user", user_input, analysis)
+            conversation.add_message("system", response, {"source": "fallback", "model": "builtin"})
+            conversation.save_session()
+            
+            return jsonify({
+                "response": response,
+                "session_id": session_id,
+                "source": "fallback",
+                "timestamp": datetime.now().isoformat()
+            })
 
         # Safety check
         if not safety_checker.is_safe(user_input):
@@ -437,267 +592,61 @@ async def _async_send_message(user, session_id):
 
         # Analyze text
         analysis = await nlp_processor.analyze_text(user_input)
-        logging.debug(f"Session {session_id}: Full analysis structure: {analysis}")
-
-        intent_map = {
-            "LABEL_0": "greeting",
-            "LABEL_1": "seeking_information",
-            "LABEL_2": "emotional_support",
-            "LABEL_3": "coping_strategies",
-            "LABEL_4": "resources_request",
-            "LABEL_5": "personal_story",
-            "LABEL_6": "crisis",
-            "LABEL_7": "physical_symptom"
-        }
-
-        if not isinstance(analysis, dict):
-            logging.error(f"Session {session_id}: Invalid analysis structure: {analysis}")
-            return jsonify({"error": "Invalid analysis result"}), 500
-
+        
+        # Extract intent and other analysis
         intent_dict = analysis.get('intent', {})
-        if not isinstance(intent_dict, dict):
-            logging.error(f"Session {session_id}: Invalid intent structure: {intent_dict}")
-            intent = "general"
-            analysis['intent'] = {"label": "LABEL_5", "confidence": 0.5, "intent": "general"}
-        else:
-            intent = intent_dict.get('intent', intent_map.get(intent_dict.get('label', ''), "general"))
-
+        intent = intent_dict.get('intent', 'general')
+        
         sentiment_dict = analysis.get('sentiment', {})
-        if not isinstance(sentiment_dict, dict):
-            logging.error(f"Session {session_id}: Invalid sentiment structure: {sentiment_dict}")
-            sentiment = "neutral"
-            analysis['sentiment'] = {"label": "neutral", "confidence": 0.5}
-        else:
-            sentiment = sentiment_dict.get('label', 'neutral')
-
+        sentiment = sentiment_dict.get('label', 'neutral')
+        
         emotions = analysis.get('emotions', 'none')
-        if not isinstance(emotions, str):
-            logging.error(f"Session {session_id}: Invalid emotions structure: {emotions}")
-            emotions = 'none'
-            analysis['emotions'] = 'none'
-
+        
+        # Get conversation context
         context = conversation.get_context()
-        if not isinstance(context, list):
-            logging.error(f"Session {session_id}: Context is not a list: {context}")
-            context = []
-        else:
-            valid_context = [msg for msg in context if isinstance(msg, dict) and 'role' in msg and 'content' in msg]
-            context = valid_context
-            logging.debug(f"Session {session_id}: Validated context: {context}")
-
-        grief_keywords = ["lost", "loss", "died", "death", "grief", "bereavement", "passed", "gone"]
-        emotional_keywords = ["sad", "anxious", "depressed", "down", "upset"]
-        analysis['is_response_to'] = len(context) + 1
-        if context:
-            last_message = next((msg for msg in reversed(context) if msg['role'] == 'system'), None)
-            if last_message and any(phrase in last_message['content'].lower() for phrase in ["tell me more", "how do you feel", "share more"]):
-                if intent not in ["emotional_support", "personal_story"] or any(kw in user_input.lower() for kw in grief_keywords + emotional_keywords):
-                    logging.info(f"Session {session_id}: Overriding intent to emotional_support for follow-up or emotional input")
-                    intent = "emotional_support"
-                    analysis['intent'] = {"label": "LABEL_2", "confidence": 0.9, "intent": "emotional_support"}
-                if any(kw in user_input.lower() for kw in grief_keywords):
-                    emotions = "grief"
-                    sentiment = "negative"
-                    analysis['emotions'] = "grief"
-                    analysis['sentiment'] = {"label": "negative", "confidence": 0.9}
-            elif any(kw in user_input.lower() for kw in grief_keywords + emotional_keywords):
-                logging.info(f"Session {session_id}: Setting emotional_support intent for emotional input")
-                intent = "emotional_support"
-                analysis['intent'] = {"label": "LABEL_2", "confidence": 0.9, "intent": "emotional_support"}
-                if any(kw in user_input.lower() for kw in grief_keywords):
-                    emotions = "grief"
-                    sentiment = "negative"
-                    analysis['emotions'] = "grief"
-                    analysis['sentiment'] = {"label": "negative", "confidence": 0.9}
-
-        if intent_dict.get('confidence', 0.0) < 0.7:
-            intent = "general"
-            analysis['intent']['intent'] = "general"
-
-        # Check for crisis terms and override intent if needed
-        if mental_health_filter.contains_crisis_language(user_input):
-            intent = "crisis"
-            analysis['intent'] = {"label": "LABEL_6", "confidence": 0.9, "intent": "crisis"}
-            logging.warning(f"Session {session_id}: Crisis language detected, overriding intent to crisis")
-
-        conversation.add_message("user", user_input, analysis)
-        context = conversation.get_context()
-        context = [msg for msg in context if isinstance(msg, dict) and 'role' in msg and 'content' in msg]
-
         user_profile = conversation.get_user_profile()
-        if not isinstance(user_profile, dict):
-            user_profile = {"preferred_responses": "neutral", "name": "", "emotion_history": [], "sentiment_history": []}
         user_profile["last_input"] = user_input
 
-        # Generate response using cascading fallback system
+        # Add user message
+        conversation.add_message("user", user_input, analysis)
+
+        # Generate response
         async with response_generator:
             response = await response_generator.generate_response(intent, sentiment, emotions, context, user_profile)
 
-        # Add metadata about model used
+        # Add system response
         system_metadata = {
             "intent": analysis['intent'],
             "source": response_generator._last_source,
-            "model": response_generator._last_source  # gemini_direct, gemini_library, openai, or builtin
+            "model": response_generator._last_source
         }
         conversation.add_message("system", response, system_metadata)
         conversation.save_session()
 
         response_time = (datetime.now() - start_time).total_seconds()
-        logging.info(
-            f"Session {session_id}: Input='{user_input}', Intent={intent}, Terms={analysis.get('neuroscience_terms', [])}"
-            f", Emotions={emotions}, Sentiment={sentiment}"
-        )
-        logging.info(
-            f"Session {session_id}: Response='{response[:50]}...', ResponseTime={response_time}s, ResponseSource={response_generator._last_source}"
-        )
+        logging.info(f"Session {session_id}: Response generated in {response_time}s")
 
         return jsonify({
             "response": response,
-            "message_id": conversation.messages[-1]["id"],  # Return the ID of the system message
+            "message_id": conversation.messages[-1]["id"],
             "session_id": session_id,
             "analysis": analysis,
             "user_profile": user_profile,
             "source": response_generator._last_source,
             "timestamp": datetime.now().isoformat()
         })
+        
     except Exception as e:
         logging.error(f"Send message error: {str(e)}", exc_info=True)
-        return jsonify({"error": f"Server error: {str(e)}"}), 500
-
-@app.route('/api/sessions/<session_id>/messages/<message_id>', methods=['PUT'])
-@token_required
-def edit_message(user, session_id, message_id):
-    """Edit a message in a chat session"""
-    try:
-        # Check if session belongs to user
-        if session_id not in user.sessions:
-            return jsonify({"error": "Session not found"}), 404
-            
-        data = request.get_json()
-        new_content = data.get('content')
-        
-        if not new_content:
-            return jsonify({"error": "No content provided"}), 400
-            
-        # Load the session
-        conversation = Conversation(Config.ENCRYPTION_KEY)
-        if not conversation.load_session(session_id):
-            return jsonify({"error": "Failed to load session"}), 500
-            
-        # Edit the message
-        if not conversation.edit_message(message_id, new_content):
-            return jsonify({"error": "Message not found"}), 404
-            
-        # Save the session
-        conversation.save_session()
-        
+        # Fallback response for errors
+        response = "I'm having trouble processing that right now. How are you feeling today?"
         return jsonify({
-            "message": "Message edited",
+            "response": response,
             "session_id": session_id,
-            "message_id": message_id
-        })
-        
-    except Exception as e:
-        logging.error(f"Edit message error: {str(e)}")
-        return jsonify({"error": f"Server error: {str(e)}"}), 500
-
-@app.route('/api/sessions/<session_id>/messages/<message_id>', methods=['DELETE'])
-@token_required
-def delete_message(user, session_id, message_id):
-    """Delete a message in a chat session"""
-    try:
-        # Check if session belongs to user
-        if session_id not in user.sessions:
-            return jsonify({"error": "Session not found"}), 404
-            
-        # Load the session
-        conversation = Conversation(Config.ENCRYPTION_KEY)
-        if not conversation.load_session(session_id):
-            return jsonify({"error": "Failed to load session"}), 500
-            
-        # Delete the message
-        if not conversation.delete_message(message_id):
-            return jsonify({"error": "Message not found"}), 404
-            
-        # Save the session
-        conversation.save_session()
-        
-        return jsonify({
-            "message": "Message deleted",
-            "session_id": session_id,
-            "message_id": message_id
-        })
-        
-    except Exception as e:
-        logging.error(f"Delete message error: {str(e)}")
-        return jsonify({"error": f"Server error: {str(e)}"}), 500
-
-# Consent, Feedback, and Status Endpoints (Keep these for backward compatibility)
-@app.route('/consent', methods=['POST'])
-def set_consent():
-    try:
-        data = request.get_json()
-        session_id = data.get('session_id', '')
-        consent = data.get('consent', False)
-        
-        conversation = Conversation(Config.ENCRYPTION_KEY)
-        if session_id:
-            if not conversation.load_session(session_id):
-                logging.warning(f"Invalid session ID: {session_id}")
-                return jsonify({"error": "Invalid session ID", "session_id": session_id}), 400
-        else:
-            session_id = conversation.session_id
-        
-        conversation.set_consent(consent)
-        conversation.save_session()
-        
-        logging.info(f"Audit: Consent set to {consent} for session {session_id}")
-        return jsonify({
-            "message": "Consent updated",
-            "session_id": session_id,
-            "consent": consent
-        })
-    except Exception as e:
-        logging.error(f"Consent endpoint error: {str(e)}")
-        return jsonify({"error": f"Server error: {str(e)}"}), 500
-
-@app.route('/feedback', methods=['POST'])
-def submit_feedback():
-    try:
-        data = request.get_json()
-        session_id = data.get('session_id', '')
-        satisfaction = data.get('satisfaction', None)
-        comments = data.get('comments', '')
-
-        if not session_id or satisfaction is None:
-            logging.warning(f"Invalid feedback request: session_id={session_id}, satisfaction={satisfaction}")
-            return jsonify({"error": "Session ID and satisfaction score required"}), 400
-
-        if not isinstance(satisfaction, int) or satisfaction < 1 or satisfaction > 5:
-            logging.warning(f"Invalid satisfaction score: {satisfaction}")
-            return jsonify({"error": "Satisfaction must be an integer between 1 and 5"}), 400
-
-        conversation = Conversation(Config.ENCRYPTION_KEY)
-        if not conversation.load_session(session_id):
-            logging.warning(f"Invalid session ID for feedback: {session_id}")
-            return jsonify({"error": "Invalid session ID", "session_id": session_id}), 400
-
-        logging.info(f"Audit: Feedback received for session {session_id}: satisfaction={satisfaction}, comments={comments}")
-        return jsonify({
-            "message": "Feedback recorded",
-            "session_id": session_id,
-            "satisfaction": satisfaction,
-            "comments": comments
-        })
-    except Exception as e:
-        logging.error(f"Feedback endpoint error: {str(e)}")
-        return jsonify({"error": f"Server error: {str(e)}"}), 500
-
-# Make the original /chat endpoint async-compatible too
-@app.route('/chat', methods=['POST'])
-def chat():
-    """Legacy chat endpoint for backward compatibility"""
-    return async_to_sync(_async_chat)()
+            "source": "error_fallback",
+            "error": str(e),
+            "timestamp": datetime.now().isoformat()
+        }), 500
 
 async def _async_chat():
     """Async implementation of the legacy chat endpoint"""
@@ -728,6 +677,25 @@ async def _async_chat():
                 "message": "Please provide consent to store conversation data via /consent endpoint"
             }), 403
 
+        # Use fallback if components are not available
+        if not all([nlp_processor, response_generator, safety_checker, mental_health_filter]):
+            logging.warning("Using fallback mode - some components unavailable")
+            response = get_fallback_response("default", user_input)
+            
+            # Add basic metadata
+            analysis = {"intent": {"intent": "general"}, "sentiment": {"label": "neutral"}, "emotions": "none"}
+            conversation.add_message("user", user_input, analysis)
+            conversation.add_message("system", response, {"source": "fallback", "model": "builtin"})
+            conversation.save_session()
+            
+            return jsonify({
+                "response": response,
+                "session_id": session_id,
+                "source": "fallback",
+                "timestamp": datetime.now().isoformat()
+            })
+
+        # Full processing with all components
         # Safety check
         if not safety_checker.is_safe(user_input):
             logging.warning(f"Session {session_id}: Unsafe input detected: {user_input}")
@@ -757,120 +725,41 @@ async def _async_chat():
                 "filtered": True
             })
 
+        # Analyze text
         analysis = await nlp_processor.analyze_text(user_input)
-        logging.debug(f"Session {session_id}: Full analysis structure: {analysis}")
-
-        intent_map = {
-            "LABEL_0": "greeting",
-            "LABEL_1": "seeking_information",
-            "LABEL_2": "emotional_support",
-            "LABEL_3": "coping_strategies",
-            "LABEL_4": "resources_request",
-            "LABEL_5": "personal_story",
-            "LABEL_6": "crisis",
-            "LABEL_7": "physical_symptom"
-        }
-
-        if not isinstance(analysis, dict):
-            logging.error(f"Session {session_id}: Invalid analysis structure: {analysis}")
-            return jsonify({"error": "Invalid analysis result"}), 500
-
+        
+        # Extract analysis components
         intent_dict = analysis.get('intent', {})
-        if not isinstance(intent_dict, dict):
-            logging.error(f"Session {session_id}: Invalid intent structure: {intent_dict}")
-            intent = "general"
-            analysis['intent'] = {"label": "LABEL_5", "confidence": 0.5, "intent": "general"}
-        else:
-            intent = intent_dict.get('intent', intent_map.get(intent_dict.get('label', ''), "general"))
-
+        intent = intent_dict.get('intent', 'general')
+        
         sentiment_dict = analysis.get('sentiment', {})
-        if not isinstance(sentiment_dict, dict):
-            logging.error(f"Session {session_id}: Invalid sentiment structure: {sentiment_dict}")
-            sentiment = "neutral"
-            analysis['sentiment'] = {"label": "neutral", "confidence": 0.5}
-        else:
-            sentiment = sentiment_dict.get('label', 'neutral')
-
+        sentiment = sentiment_dict.get('label', 'neutral')
+        
         emotions = analysis.get('emotions', 'none')
-        if not isinstance(emotions, str):
-            logging.error(f"Session {session_id}: Invalid emotions structure: {emotions}")
-            emotions = 'none'
-            analysis['emotions'] = 'none'
-
+        
+        # Get context and user profile
         context = conversation.get_context()
-        if not isinstance(context, list):
-            logging.error(f"Session {session_id}: Context is not a list: {context}")
-            context = []
-        else:
-            valid_context = [msg for msg in context if isinstance(msg, dict) and 'role' in msg and 'content' in msg]
-            context = valid_context
-            logging.debug(f"Session {session_id}: Validated context: {context}")
-
-        grief_keywords = ["lost", "loss", "died", "death", "grief", "bereavement", "passed", "gone"]
-        emotional_keywords = ["sad", "anxious", "depressed", "down", "upset"]
-        analysis['is_response_to'] = len(context) + 1
-        if context:
-            last_message = next((msg for msg in reversed(context) if msg['role'] == 'system'), None)
-            if last_message and any(phrase in last_message['content'].lower() for phrase in ["tell me more", "how do you feel", "share more"]):
-                if intent not in ["emotional_support", "personal_story"] or any(kw in user_input.lower() for kw in grief_keywords + emotional_keywords):
-                    logging.info(f"Session {session_id}: Overriding intent to emotional_support for follow-up or emotional input")
-                    intent = "emotional_support"
-                    analysis['intent'] = {"label": "LABEL_2", "confidence": 0.9, "intent": "emotional_support"}
-                if any(kw in user_input.lower() for kw in grief_keywords):
-                    emotions = "grief"
-                    sentiment = "negative"
-                    analysis['emotions'] = "grief"
-                    analysis['sentiment'] = {"label": "negative", "confidence": 0.9}
-            elif any(kw in user_input.lower() for kw in grief_keywords + emotional_keywords):
-                logging.info(f"Session {session_id}: Setting emotional_support intent for emotional input")
-                intent = "emotional_support"
-                analysis['intent'] = {"label": "LABEL_2", "confidence": 0.9, "intent": "emotional_support"}
-                if any(kw in user_input.lower() for kw in grief_keywords):
-                    emotions = "grief"
-                    sentiment = "negative"
-                    analysis['emotions'] = "grief"
-                    analysis['sentiment'] = {"label": "negative", "confidence": 0.9}
-
-        if intent_dict.get('confidence', 0.0) < 0.7:
-            intent = "general"
-            analysis['intent']['intent'] = "general"
-
-        # Check for crisis terms and override intent if needed
-        if mental_health_filter.contains_crisis_language(user_input):
-            intent = "crisis"
-            analysis['intent'] = {"label": "LABEL_6", "confidence": 0.9, "intent": "crisis"}
-            logging.warning(f"Session {session_id}: Crisis language detected, overriding intent to crisis")
-
-        conversation.add_message("user", user_input, analysis)
-        context = conversation.get_context()
-        context = [msg for msg in context if isinstance(msg, dict) and 'role' in msg and 'content' in msg]
-
         user_profile = conversation.get_user_profile()
-        if not isinstance(user_profile, dict):
-            user_profile = {"preferred_responses": "neutral", "name": "", "emotion_history": [], "sentiment_history": []}
         user_profile["last_input"] = user_input
 
-        # Generate response using cascading fallback system
+        # Add user message
+        conversation.add_message("user", user_input, analysis)
+
+        # Generate response
         async with response_generator:
             response = await response_generator.generate_response(intent, sentiment, emotions, context, user_profile)
 
-        # Add metadata about model used
+        # Add system response
         system_metadata = {
             "intent": analysis['intent'],
             "source": response_generator._last_source,
-            "model": response_generator._last_source  # gemini_direct, gemini_library, openai, or builtin
+            "model": response_generator._last_source
         }
         conversation.add_message("system", response, system_metadata)
         conversation.save_session()
 
         response_time = (datetime.now() - start_time).total_seconds()
-        logging.info(
-            f"Session {session_id}: Input='{user_input}', Intent={intent}, Terms={analysis.get('neuroscience_terms', [])}"
-            f", Emotions={emotions}, Sentiment={sentiment}"
-        )
-        logging.info(
-            f"Session {session_id}: Response='{response[:50]}...', ResponseTime={response_time}s, ResponseSource={response_generator._last_source}"
-        )
+        logging.info(f"Session {session_id}: Response generated in {response_time}s")
 
         return jsonify({
             "response": response,
@@ -880,44 +769,44 @@ async def _async_chat():
             "source": response_generator._last_source,
             "timestamp": datetime.now().isoformat()
         })
+        
     except Exception as e:
         logging.error(f"Chat endpoint error: {str(e)}", exc_info=True)
-        return jsonify({"error": f"Server error: {str(e)}"}), 500
+        # Fallback response for errors
+        response = "I'm having trouble processing that right now. How are you feeling today?"
+        return jsonify({
+            "response": response,
+            "session_id": session_id or "",
+            "source": "error_fallback",
+            "error": str(e),
+            "timestamp": datetime.now().isoformat()
+        }), 500
 
-@app.route('/status', methods=['GET'])
-def get_status():
-    """Endpoint to check API connectivity status"""
-    status = {
-        "status": "operational",
+# Simple health check endpoint
+@app.route('/health')
+def health_check():
+    """Simple health check endpoint"""
+    return jsonify({
+        "status": "healthy",
         "timestamp": datetime.now().isoformat(),
         "components": {
-            "gemini_direct": "unknown",
-            "gemini_library": "unknown",
-            "openai": "unknown"
+            "nlp_processor": "available" if nlp_processor else "unavailable",
+            "response_generator": "available" if response_generator else "unavailable",
+            "safety_checker": "available" if safety_checker else "unavailable",
+            "mental_health_filter": "available" if mental_health_filter else "unavailable"
         }
-    }
-    
-    # Check Gemini direct API status
-    if response_generator.gemini_api_key:
-        status["components"]["gemini_direct"] = "configured"
-    else:
-        status["components"]["gemini_direct"] = "not configured"
-    
-    # Check Gemini library status
-    if response_generator.gemini_model:
-        status["components"]["gemini_library"] = "available"
-    else:
-        status["components"]["gemini_library"] = "unavailable"
-    
-    # Check OpenAI status
-    if response_generator.openai_client:
-        status["components"]["openai"] = "available"
-    else:
-        status["components"]["openai"] = "unavailable"
-    
-    return jsonify(status)
+    })
 
+# Create ASGI app for deployment
 asgi_app = WsgiToAsgi(app)
 
 if __name__ == '__main__':
-    app.run(port=Config.PORT, debug=False)
+    # Get port from environment variable (Render sets this)
+    port = int(os.environ.get('PORT', Config.PORT))
+    
+    print(f"🚀 Starting Mental Health Chatbot on port {port}")
+    print(f"📊 Swagger docs available at: http://localhost:{port}/swagger")
+    print(f"💚 Health check at: http://localhost:{port}/health")
+    
+    # Bind to 0.0.0.0 for Render (not just localhost)
+    app.run(host='0.0.0.0', port=port, debug=False)
