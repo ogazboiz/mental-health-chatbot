@@ -18,8 +18,8 @@ class MentalHealthResponseGenerator:
         self.openai_api_key = Config.OPENAI_API_KEY
         self.mental_health_topics = Config.MENTAL_HEALTH_TOPICS
         
-        # Direct httpx client for raw API calls
-        self.http_client = httpx.AsyncClient(timeout=30.0)
+        # FIXED: Removed persistent HTTP client that was causing "client closed" errors
+        # self.http_client = httpx.AsyncClient(timeout=30.0)  # ← REMOVED THIS LINE
         
         # Set up Gemini with proper configuration
         if self.gemini_api_key:
@@ -27,27 +27,28 @@ class MentalHealthResponseGenerator:
                 # Configure the Google generativeai library
                 genai.configure(api_key=self.gemini_api_key)
                 
-                # Set fixed model based on curl test - this is the model that worked in your curl command
+                # Set fixed model based on your working test
                 self.gemini_model_name = "gemini-2.0-flash"
                 
-                # Set up direct API endpoint - this matches your successful curl request format
+                # Set up direct API endpoint - this matches your successful test format
                 self.direct_api_endpoint = f"https://generativelanguage.googleapis.com/v1beta/models/{self.gemini_model_name}:generateContent?key={self.gemini_api_key}"
-                logging.info(f"Set up direct API endpoint for {self.gemini_model_name}")
+                logging.info(f"✅ Gemini API configured with key: {self.gemini_api_key[:10]}...")
+                logging.info(f"✅ Direct API endpoint ready: {self.direct_api_endpoint}")
                 
                 # Try to initialize the model using the library as fallback
                 try:
                     self.gemini_model = genai.GenerativeModel(self.gemini_model_name)
-                    logging.info(f"Also initialized library model: {self.gemini_model_name}")
+                    logging.info(f"✅ Library model initialized: {self.gemini_model_name}")
                 except Exception as model_error:
-                    logging.warning(f"Could not initialize model through library: {str(model_error)}")
+                    logging.warning(f"⚠️ Could not initialize model through library: {str(model_error)}")
                     self.gemini_model = None
                     
             except Exception as e:
-                logging.error(f"Failed to initialize Gemini: {str(e)}")
+                logging.error(f"❌ Failed to initialize Gemini: {str(e)}")
                 self.gemini_model = None
                 self.gemini_model_name = None
         else:
-            logging.warning("No Gemini API key provided, will skip Gemini generation")
+            logging.warning("❌ No Gemini API key provided")
             self.gemini_model = None
             self.gemini_model_name = None
         
@@ -57,11 +58,11 @@ class MentalHealthResponseGenerator:
             try:
                 from openai import AsyncOpenAI
                 self.openai_client = AsyncOpenAI(api_key=self.openai_api_key)
-                logging.info("Successfully initialized OpenAI client for secondary fallback")
+                logging.info(f"✅ OpenAI client initialized with key: {self.openai_api_key[:10]}...")
             except Exception as e:
-                logging.error(f"Failed to initialize OpenAI client: {str(e)}")
+                logging.error(f"❌ Failed to initialize OpenAI client: {str(e)}")
         else:
-            logging.warning("No OpenAI API key provided, will skip OpenAI fallback")
+            logging.warning("❌ No OpenAI API key provided")
         
         # Base system prompt with mental health focus and NeuralEase branding
         self.base_system_prompt = f"""
@@ -153,11 +154,13 @@ class MentalHealthResponseGenerator:
         return self
 
     async def __aexit__(self, exc_type, exc, tb):
-        await self.http_client.aclose()
+        # FIXED: Removed HTTP client closure since we don't have a persistent client anymore
+        # await self.http_client.aclose()  # ← REMOVED THIS LINE
+        pass
         
     async def generate_response(self, intent: str, sentiment: str, emotions: str, context: List[Dict[str, Any]], user_profile: Dict[str, Any]) -> str:
         """Generate a response using cascading fallback system:
-        1. Try Gemini API first (primary)
+        1. Try Gemini API first (primary) - YOUR WORKING API
         2. Fall back to OpenAI if Gemini fails (secondary)
         3. Use built-in responses if both APIs fail (tertiary)
         """
@@ -193,10 +196,10 @@ class MentalHealthResponseGenerator:
         Respond as {self.chatbot_name}, providing compassionate mental health support.
         """
         
-        # 1. PRIMARY: Try direct Gemini API call first (like your working curl command)
+        # 1. PRIMARY: Try direct Gemini API call first (YOUR WORKING API!)
         if self.gemini_api_key:
             try:
-                logging.info("PRIMARY: Attempting direct Gemini API call (matching curl format)")
+                logging.info("🚀 PRIMARY: Attempting Gemini API call (your working API)")
                 result = await self._async_generate_gemini_direct(gemini_prompt)
                 self._last_source = "gemini"
                 
@@ -219,18 +222,19 @@ class MentalHealthResponseGenerator:
                 if len(result) > 500:
                     result = result[:497] + "..."
                     
+                logging.info(f"✅ SUCCESS: Gemini API response generated successfully")
                 return result
                 
             except Exception as e:
-                logging.error(f"Gemini API call failed: {str(e)}")
-                logging.info("Falling back to OpenAI (secondary)")
+                logging.error(f"❌ Gemini API call failed: {str(e)}")
+                logging.info("⏭️ Falling back to OpenAI (secondary)")
         else:
-            logging.warning("No Gemini API key, skipping to OpenAI (secondary)")
+            logging.warning("❌ No Gemini API key, skipping to OpenAI (secondary)")
             
         # 2. SECONDARY: Try OpenAI as fallback
         if self.openai_client:
             try:
-                logging.info("SECONDARY: Attempting OpenAI generation")
+                logging.info("🔄 SECONDARY: Attempting OpenAI generation")
                 result = await self._async_generate_openai(user_input, conversation_history, intent, emotions, style)
                 self._last_source = "openai"
                 
@@ -253,16 +257,17 @@ class MentalHealthResponseGenerator:
                 if len(result) > 500:
                     result = result[:497] + "..."
                     
+                logging.info(f"✅ SUCCESS: OpenAI response generated successfully")
                 return result
                 
             except Exception as e:
-                logging.error(f"OpenAI generation failed: {str(e)}")
-                logging.info("Falling back to built-in responses (tertiary)")
+                logging.error(f"❌ OpenAI generation failed: {str(e)}")
+                logging.info("⏭️ Falling back to built-in responses (tertiary)")
         else:
-            logging.warning("No OpenAI client, skipping to built-in responses (tertiary)")
+            logging.warning("❌ No OpenAI client, skipping to built-in responses (tertiary)")
 
         # 3. TERTIARY: Fall back to built-in responses as last resort
-        logging.info("TERTIARY: Using built-in fallback response")
+        logging.info("🛡️ TERTIARY: Using built-in fallback response")
         return self._get_fallback_response(intent, emotions, user_profile, context)
     
     def _is_initial_greeting(self, context: List[Dict[str, Any]]) -> bool:
@@ -340,12 +345,12 @@ class MentalHealthResponseGenerator:
         return response
     
     async def _async_generate_gemini_direct(self, prompt: str) -> str:
-        """Generate text with Gemini using direct API call (matching curl format)"""
+        """Generate text with Gemini using direct API call (FIXED HTTP CLIENT!)"""
         if not self.gemini_api_key:
             raise ValueError("Gemini API key not configured")
             
         try:
-            # Create the request payload - exactly like your curl command
+            # Create the request payload - exactly like your working test
             payload = {
                 "contents": [{
                     "parts": [{"text": prompt}]
@@ -353,41 +358,44 @@ class MentalHealthResponseGenerator:
             }
             
             # Log the endpoint for debugging
-            logging.debug(f"Using direct API endpoint: {self.direct_api_endpoint}")
+            logging.debug(f"Using Gemini API endpoint: {self.direct_api_endpoint}")
             
-            # Make the API call - format matches your working curl command
-            headers = {"Content-Type": "application/json"}
-            response = await self.http_client.post(
-                self.direct_api_endpoint,
-                headers=headers,
-                json=payload
-            )
-            
-            # Check for errors
-            if response.status_code != 200:
-                logging.error(f"API error: {response.status_code} - {response.text}")
-                raise Exception(f"API error: {response.status_code} - {response.text}")
+            # FIXED: Create a fresh HTTP client for each request (prevents "client closed" error)
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                # Make the API call - format matches your working test
+                headers = {"Content-Type": "application/json"}
+                response = await client.post(
+                    self.direct_api_endpoint,
+                    headers=headers,
+                    json=payload
+                )
                 
-            # Parse the response
-            result = response.json()
-            
-            # Extract the text from the response - matches the structure of your curl response
-            if (
-                "candidates" in result 
-                and len(result["candidates"]) > 0 
-                and "content" in result["candidates"][0]
-                and "parts" in result["candidates"][0]["content"]
-                and len(result["candidates"][0]["content"]["parts"]) > 0
-                and "text" in result["candidates"][0]["content"]["parts"][0]
-            ):
-                text = result["candidates"][0]["content"]["parts"][0]["text"]
-                return text
-            else:
-                logging.error(f"Unexpected response format: {result}")
-                raise Exception(f"Unexpected response format: {result}")
+                # Check for errors
+                if response.status_code != 200:
+                    logging.error(f"Gemini API error: {response.status_code} - {response.text}")
+                    raise Exception(f"API error: {response.status_code} - {response.text}")
+                    
+                # Parse the response
+                result = response.json()
+                
+                # Extract the text from the response - matches your test response structure
+                if (
+                    "candidates" in result 
+                    and len(result["candidates"]) > 0 
+                    and "content" in result["candidates"][0]
+                    and "parts" in result["candidates"][0]["content"]
+                    and len(result["candidates"][0]["content"]["parts"]) > 0
+                    and "text" in result["candidates"][0]["content"]["parts"][0]
+                ):
+                    text = result["candidates"][0]["content"]["parts"][0]["text"]
+                    logging.info(f"✅ Gemini API returned: {text[:50]}...")
+                    return text
+                else:
+                    logging.error(f"❌ Unexpected Gemini response format: {result}")
+                    raise Exception(f"Unexpected response format: {result}")
                 
         except Exception as e:
-            logging.error(f"Direct Gemini API error: {str(e)}")
+            logging.error(f"❌ Direct Gemini API error: {str(e)}")
             raise
     
     async def _async_generate_openai(self, user_input: str, conversation_history: str, intent: str, emotions: str, style: str) -> str:
@@ -445,7 +453,7 @@ class MentalHealthResponseGenerator:
             return result
             
         except Exception as e:
-            logging.error(f"OpenAI API error: {str(e)}")
+            logging.error(f"❌ OpenAI API error: {str(e)}")
             raise
             
     def _format_conversation_history(self, context: List[Dict[str, Any]]) -> str:

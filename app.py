@@ -1,11 +1,10 @@
 import asyncio
 import os
 import time
-from flask import Flask, request, jsonify, make_response
-from flask_restx import Api, Resource, fields, Namespace
+from flask import Flask, request, jsonify, make_response, render_template_string
 from modules.conversation import Conversation
+from modules.mental_health_response_generator import MentalHealthResponseGenerator  
 from modules.nlp_processor import NLPProcessor
-from modules.mental_health_response_generator import MentalHealthResponseGenerator
 from modules.safety_checker import SafetyChecker
 from modules.mental_health_filter import MentalHealthFilter
 from modules.user_auth import User, AuthToken
@@ -42,159 +41,6 @@ console_handler.setLevel(logging.INFO)
 logging.getLogger('').addHandler(console_handler)
 
 app = Flask(__name__)
-
-# ============================================================================
-# SWAGGER API SETUP AND DOCUMENTATION
-# ============================================================================
-
-# Initialize Flask-RESTX for Swagger documentation
-api = Api(
-    app,
-    version='1.0.0',
-    title='NeuralEase Mental Health Chatbot API',
-    description='''
-    A comprehensive mental health support chatbot API with user authentication and session management.
-    
-    ## 🧠 Features
-    - **AI-powered conversations**: Intelligent mental health support using advanced NLP
-    - **Secure authentication**: JWT token-based user authentication system
-    - **Session management**: Persistent chat sessions with full history
-    - **Safety filtering**: Content moderation and crisis detection
-    - **User profiles**: Personalized experience and preference management
-    - **Mental health focus**: Specialized domain filtering and responses
-    
-    ## 🚀 Getting Started
-    1. **Register**: Create a new account using `/api/auth/register`
-    2. **Login**: Authenticate and get your JWT token at `/api/auth/login`
-    3. **Create Session**: Start a new chat session at `/api/sessions`
-    4. **Send Messages**: Begin chatting at `/api/sessions/{session_id}/messages`
-    
-    ## 🔐 Authentication
-    Most endpoints require authentication. Include your JWT token in the Authorization header:
-    ```
-    Authorization: Bearer <your_jwt_token>
-    ```
-    
-    ## 🆘 Crisis Resources
-    **If you're experiencing a mental health crisis, please reach out immediately:**
-    - **US Suicide & Crisis Lifeline**: 988
-    - **Crisis Text Line**: Text HOME to 741741
-    - **Emergency Services**: 911
-    - **International**: Visit findahelpline.com
-    
-    ## 📊 System Status
-    - **Health Check**: `/health` - Basic system health
-    - **Detailed Status**: `/status` - Component-level status
-    ''',
-    doc='/docs',  # Swagger UI will be available at /docs
-    authorizations={
-        'Bearer': {
-            'type': 'apiKey',
-            'in': 'header',
-            'name': 'Authorization',
-            'description': 'JWT token. Format: Bearer &lt;your_token&gt;'
-        }
-    },
-    security='Bearer'
-)
-
-# Create namespaces for better organization
-auth_ns = Namespace('auth', description='🔐 Authentication Operations', path='/api/auth')
-user_ns = Namespace('user', description='👤 User Profile Management', path='/api/user')
-sessions_ns = Namespace('sessions', description='💬 Chat Session Management', path='/api/sessions')
-legacy_ns = Namespace('legacy', description='🔄 Legacy Endpoints (Backward Compatibility)', path='/')
-
-api.add_namespace(auth_ns)
-api.add_namespace(user_ns)
-api.add_namespace(sessions_ns)
-api.add_namespace(legacy_ns)
-
-# ============================================================================
-# API MODELS FOR REQUEST/RESPONSE DOCUMENTATION
-# ============================================================================
-
-# Authentication models
-auth_register_model = api.model('RegisterRequest', {
-    'username': fields.String(required=True, description='Unique username (3-50 characters)', example='john_doe'),
-    'email': fields.String(required=True, description='Valid email address', example='john@example.com'),
-    'password': fields.String(required=True, description='Password (minimum 8 characters)', example='securepassword123')
-})
-
-auth_login_model = api.model('LoginRequest', {
-    'username': fields.String(required=True, description='Your username', example='john_doe'),
-    'password': fields.String(required=True, description='Your password', example='securepassword123')
-})
-
-auth_response_model = api.model('AuthResponse', {
-    'message': fields.String(description='Response message', example='Login successful'),
-    'user_id': fields.String(description='Unique user identifier'),
-    'username': fields.String(description='Username'),
-    'email': fields.String(description='Email address'),
-    'token': fields.String(description='JWT authentication token')
-})
-
-# Profile models
-profile_update_model = api.model('ProfileUpdateRequest', {
-    'profile': fields.Raw(description='Profile data object', example={
-        'preferences': {'theme': 'dark', 'notifications': True},
-        'bio': 'Mental health advocate',
-        'timezone': 'UTC'
-    })
-})
-
-# Session models
-session_create_model = api.model('CreateSessionRequest', {
-    'title': fields.String(description='Optional session title', example='Daily Check-in')
-})
-
-session_update_model = api.model('UpdateSessionRequest', {
-    'title': fields.String(required=True, description='New session title', example='Anxiety Support Session')
-})
-
-session_response_model = api.model('SessionResponse', {
-    'session_id': fields.String(description='Unique session identifier'),
-    'title': fields.String(description='Session title'),
-    'created_at': fields.String(description='Creation timestamp'),
-    'last_interaction': fields.String(description='Last interaction timestamp'),
-    'messages': fields.List(fields.Raw, description='List of messages in session'),
-    'user_profile': fields.Raw(description='User profile data')
-})
-
-# Message models
-message_send_model = api.model('SendMessageRequest', {
-    'message': fields.String(required=True, description='Your message to the chatbot', example='I am feeling anxious about work today')
-})
-
-message_edit_model = api.model('EditMessageRequest', {
-    'content': fields.String(required=True, description='New message content', example='I am feeling better now')
-})
-
-message_response_model = api.model('MessageResponse', {
-    'response': fields.String(description='Chatbot response'),
-    'message_id': fields.String(description='Message identifier'),
-    'session_id': fields.String(description='Session identifier'),
-    'analysis': fields.Raw(description='NLP analysis results'),
-    'user_profile': fields.Raw(description='Updated user profile'),
-    'source': fields.String(description='Response source (AI model used)'),
-    'timestamp': fields.String(description='Response timestamp')
-})
-
-# Legacy models
-chat_legacy_model = api.model('ChatRequest', {
-    'message': fields.String(required=True, description='Your message', example='Hello, I need someone to talk to'),
-    'session_id': fields.String(description='Optional session ID to continue conversation')
-})
-
-consent_model = api.model('ConsentRequest', {
-    'session_id': fields.String(description='Session ID (optional)'),
-    'consent': fields.Boolean(required=True, description='Consent to data storage', example=True)
-})
-
-feedback_model = api.model('FeedbackRequest', {
-    'session_id': fields.String(required=True, description='Session ID'),
-    'satisfaction': fields.Integer(required=True, min=1, max=5, description='Satisfaction rating (1-5)', example=4),
-    'comments': fields.String(description='Optional feedback comments', example='The chatbot was very helpful')
-})
 
 # Initialize components
 print("Initializing chatbot components...")
@@ -236,235 +82,531 @@ def token_required(f):
             token = request.json.get('token')
             
         if not token:
-            api.abort(401, 'Authentication token is missing')
+            return jsonify({'error': 'Authentication token is missing'}), 401
             
         # Validate token
         user_id = AuthToken.validate_token(token)
         if not user_id:
-            api.abort(401, 'Invalid or expired token')
+            return jsonify({'error': 'Invalid or expired token'}), 401
             
         # Load user
         user = User()
         if not user.load_by_user_id(user_id):
-            api.abort(404, 'User not found')
+            return jsonify({'error': 'User not found'}), 404
             
-        return f(user, *args, **kwargs)
+        # Add user to kwargs
+        kwargs['user'] = user
+        
+        return f(*args, **kwargs)
     
     return decorated
 
 # ============================================================================
-# ROOT AND STATUS ENDPOINTS
+# DOCUMENTATION TEMPLATE
 # ============================================================================
 
-@api.route('/')
-class APIRoot(Resource):
-    @api.doc('api_root')
-    def get(self):
-        """API Root - Welcome and navigation"""
-        return {
-            "name": "NeuralEase Mental Health Chatbot API",
-            "version": "1.0.0",
-            "status": "operational",
-            "message": "Welcome to NeuralEase Mental Health Chatbot API",
-            "documentation": {
-                "swagger_ui": "/docs",
-                "description": "Interactive API documentation with try-it-out functionality"
-            },
-            "endpoints": {
-                "health_check": "/health",
-                "detailed_status": "/status"
-            },
-            "quick_start": {
-                "1": "Register at /api/auth/register",
-                "2": "Login at /api/auth/login",
-                "3": "Create session at /api/sessions",
-                "4": "Start chatting at /api/sessions/{session_id}/messages"
-            },
-            "support": "This API provides mental health support through AI-powered conversations"
+DOCS_HTML = """
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NeuralEase API Documentation</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { 
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            line-height: 1.6; color: #333; background: #f8f9fa;
         }
+        .container { max-width: 1200px; margin: 0 auto; padding: 20px; }
+        .header { 
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white; padding: 40px 0; text-align: center; margin-bottom: 30px;
+        }
+        .header h1 { font-size: 2.5em; margin-bottom: 10px; }
+        .header p { font-size: 1.2em; opacity: 0.9; }
+        .section { background: white; margin: 20px 0; padding: 30px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        .section h2 { color: #667eea; margin-bottom: 20px; border-bottom: 2px solid #eee; padding-bottom: 10px; }
+        .section h3 { color: #555; margin: 20px 0 10px 0; }
+        .endpoint { 
+            background: #f8f9fa; border-left: 4px solid #667eea; padding: 15px; margin: 10px 0; border-radius: 5px;
+        }
+        .method { 
+            display: inline-block; padding: 4px 8px; border-radius: 4px; font-weight: bold; font-size: 0.9em; margin-right: 10px;
+        }
+        .get { background: #28a745; color: white; }
+        .post { background: #007bff; color: white; }
+        .put { background: #ffc107; color: #333; }
+        .delete { background: #dc3545; color: white; }
+        .crisis-box { 
+            background: #fff3cd; border: 1px solid #ffeaa7; padding: 20px; border-radius: 8px; margin: 20px 0;
+        }
+        .crisis-box h3 { color: #856404; margin-bottom: 10px; }
+        .crisis-box strong { color: #d63384; }
+        .quick-start { background: #e7f3ff; border-left: 4px solid #007bff; padding: 20px; margin: 20px 0; }
+        .auth-box { background: #f0f8f0; border-left: 4px solid #28a745; padding: 20px; margin: 20px 0; }
+        .code { background: #f4f4f4; padding: 10px; border-radius: 4px; font-family: monospace; margin: 10px 0; }
+        .example { background: #f8f9fa; border: 1px solid #dee2e6; padding: 15px; border-radius: 4px; margin: 10px 0; }
+        .badge { background: #667eea; color: white; padding: 2px 8px; border-radius: 12px; font-size: 0.8em; }
+        .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; }
+        .nav { background: white; padding: 15px 0; border-bottom: 1px solid #eee; position: sticky; top: 0; z-index: 100; }
+        .nav ul { list-style: none; display: flex; justify-content: center; flex-wrap: wrap; }
+        .nav li { margin: 0 15px; }
+        .nav a { text-decoration: none; color: #667eea; font-weight: 500; padding: 5px 10px; border-radius: 5px; }
+        .nav a:hover { background: #f0f0f0; }
+        @media (max-width: 768px) {
+            .container { padding: 10px; }
+            .header h1 { font-size: 2em; }
+            .grid { grid-template-columns: 1fr; }
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="container">
+            <h1>🧠 NeuralEase API</h1>
+            <p>Mental Health Chatbot API with Authentication & Session Management</p>
+            <div style="margin-top: 20px;">
+                <span class="badge">v1.0.0</span>
+                <span class="badge">REST API</span>
+                <span class="badge">JWT Auth</span>
+            </div>
+        </div>
+    </div>
 
-@api.route('/health')
-class HealthCheck(Resource):
-    @api.doc('health_check')
-    @api.response(200, 'System is healthy')
-    def get(self):
-        """Health check - Verify API is running"""
-        return {
-            "status": "healthy",
-            "timestamp": datetime.now().isoformat(),
-            "uptime": "running",
-            "components": {
-                "nlp_processor": "available" if nlp_processor else "unavailable",
-                "response_generator": "available" if response_generator else "unavailable",
-                "safety_checker": "available" if safety_checker else "unavailable",
-                "mental_health_filter": "available" if mental_health_filter else "unavailable"
-            }
-        }
+    <nav class="nav">
+        <div class="container">
+            <ul>
+                <li><a href="#quick-start">🚀 Quick Start</a></li>
+                <li><a href="#auth">🔐 Authentication</a></li>
+                <li><a href="#sessions">💬 Sessions</a></li>
+                <li><a href="#messages">📝 Messages</a></li>
+                <li><a href="#legacy">🔄 Legacy</a></li>
+                <li><a href="#crisis">🆘 Crisis</a></li>
+            </ul>
+        </div>
+    </nav>
 
-@api.route('/status')
-class StatusCheck(Resource):
-    @api.doc('status_check')
-    @api.response(200, 'Detailed system status')
-    def get(self):
-        """Detailed system status and component health"""
-        status = {
-            "status": "operational",
-            "timestamp": datetime.now().isoformat(),
-            "version": "1.0.0",
-            "environment": os.environ.get('FLASK_ENV', 'production'),
-            "components": {
-                "nlp_processor": "available" if nlp_processor else "unavailable",
-                "response_generator": "available" if response_generator else "unavailable",
-                "safety_checker": "available" if safety_checker else "unavailable",
-                "mental_health_filter": "available" if mental_health_filter else "unavailable"
-            }
-        }
-        
-        if response_generator:
-            # Check AI API status
-            if hasattr(response_generator, 'gemini_api_key') and response_generator.gemini_api_key:
-                status["components"]["gemini_api"] = "configured"
-            else:
-                status["components"]["gemini_api"] = "not configured"
+    <div class="container">
+        <div class="crisis-box">
+            <h3>🆘 Mental Health Crisis Resources</h3>
+            <p><strong>If you're experiencing a mental health crisis, please reach out immediately:</strong></p>
+            <ul style="margin: 10px 0 0 20px;">
+                <li><strong>US Suicide & Crisis Lifeline:</strong> 988</li>
+                <li><strong>Crisis Text Line:</strong> Text HOME to 741741</li>
+                <li><strong>Emergency Services:</strong> 911</li>
+                <li><strong>International:</strong> Visit findahelpline.com</li>
+            </ul>
+        </div>
+
+        <section id="quick-start" class="section">
+            <h2>🚀 Quick Start</h2>
+            <div class="quick-start">
+                <h3>Get Started in 4 Steps:</h3>
+                <ol style="margin: 10px 0 0 20px;">
+                    <li><strong>Register:</strong> Create account at <code>POST /api/auth/register</code></li>
+                    <li><strong>Login:</strong> Get your JWT token at <code>POST /api/auth/login</code></li>
+                    <li><strong>Create Session:</strong> Start chatting at <code>POST /api/sessions</code></li>
+                    <li><strong>Send Messages:</strong> Chat at <code>POST /api/sessions/{session_id}/messages</code></li>
+                </ol>
+            </div>
             
-            if hasattr(response_generator, 'openai_client') and response_generator.openai_client:
-                status["components"]["openai_api"] = "available"
-            else:
-                status["components"]["openai_api"] = "unavailable"
+            <h3>Base URL</h3>
+            <div class="code">{{ base_url }}</div>
+            
+            <h3>System Status</h3>
+            <div class="grid">
+                <div class="endpoint">
+                    <span class="method get">GET</span><strong>/health</strong><br>
+                    Basic health check
+                </div>
+                <div class="endpoint">
+                    <span class="method get">GET</span><strong>/status</strong><br>
+                    Detailed system status
+                </div>
+            </div>
+        </section>
+
+        <section id="auth" class="section">
+            <h2>🔐 Authentication</h2>
+            <div class="auth-box">
+                <h3>🔑 Authorization Header</h3>
+                <p>Include your JWT token in requests:</p>
+                <div class="code">Authorization: Bearer &lt;your_jwt_token&gt;</div>
+            </div>
+
+            <h3>Authentication Endpoints</h3>
+            
+            <div class="endpoint">
+                <span class="method post">POST</span><strong>/api/auth/register</strong><br>
+                Register a new user account
+                <div class="example">
+                    <strong>Request:</strong>
+                    <pre>{ "username": "john_doe", "email": "john@example.com", "password": "securepass123" }</pre>
+                </div>
+            </div>
+
+            <div class="endpoint">
+                <span class="method post">POST</span><strong>/api/auth/login</strong><br>
+                Login with username and password
+                <div class="example">
+                    <strong>Request:</strong>
+                    <pre>{ "username": "john_doe", "password": "securepass123" }</pre>
+                </div>
+            </div>
+
+            <div class="endpoint">
+                <span class="method post">POST</span><strong>/api/auth/logout</strong><br>
+                Logout user (clears token cookie)
+            </div>
+
+            <div class="endpoint">
+                <span class="method post">POST</span><strong>/api/auth/refresh</strong><br>
+                Refresh authentication token <span class="badge">Requires Auth</span>
+            </div>
+        </section>
+
+        <section class="section">
+            <h2>👤 User Profile</h2>
+            
+            <div class="endpoint">
+                <span class="method get">GET</span><strong>/api/user/profile</strong> <span class="badge">Requires Auth</span><br>
+                Get user profile information
+            </div>
+
+            <div class="endpoint">
+                <span class="method put">PUT</span><strong>/api/user/profile</strong> <span class="badge">Requires Auth</span><br>
+                Update user profile
+                <div class="example">
+                    <strong>Request:</strong>
+                    <pre>{ "profile": { "preferences": { "theme": "dark" }, "bio": "Mental health advocate" } }</pre>
+                </div>
+            </div>
+        </section>
+
+        <section id="sessions" class="section">
+            <h2>💬 Chat Sessions</h2>
+            
+            <div class="endpoint">
+                <span class="method get">GET</span><strong>/api/sessions</strong> <span class="badge">Requires Auth</span><br>
+                Get all chat sessions for user
+            </div>
+
+            <div class="endpoint">
+                <span class="method post">POST</span><strong>/api/sessions</strong> <span class="badge">Requires Auth</span><br>
+                Create a new chat session
+                <div class="example">
+                    <strong>Request:</strong>
+                    <pre>{ "title": "Daily Check-in" }</pre>
+                </div>
+            </div>
+
+            <div class="endpoint">
+                <span class="method get">GET</span><strong>/api/sessions/{session_id}</strong> <span class="badge">Requires Auth</span><br>
+                Get specific session with full message history
+            </div>
+
+            <div class="endpoint">
+                <span class="method put">PUT</span><strong>/api/sessions/{session_id}</strong> <span class="badge">Requires Auth</span><br>
+                Update session (rename)
+                <div class="example">
+                    <strong>Request:</strong>
+                    <pre>{ "title": "Anxiety Support Session" }</pre>
+                </div>
+            </div>
+
+            <div class="endpoint">
+                <span class="method delete">DELETE</span><strong>/api/sessions/{session_id}</strong> <span class="badge">Requires Auth</span><br>
+                Delete a chat session
+            </div>
+        </section>
+
+        <section id="messages" class="section">
+            <h2>📝 Messages</h2>
+            
+            <div class="endpoint">
+                <span class="method post">POST</span><strong>/api/sessions/{session_id}/messages</strong> <span class="badge">Requires Auth</span><br>
+                Send a message to the chatbot
+                <div class="example">
+                    <strong>Request:</strong>
+                    <pre>{ "message": "I am feeling anxious about work today" }</pre>
+                    <strong>Response includes:</strong>
+                    <ul style="margin-top: 10px;">
+                        <li>• AI-generated response</li>
+                        <li>• Sentiment analysis</li>
+                        <li>• Intent detection</li>
+                        <li>• Safety filtering</li>
+                        <li>• Crisis detection</li>
+                    </ul>
+                </div>
+            </div>
+
+            <div class="endpoint">
+                <span class="method put">PUT</span><strong>/api/sessions/{session_id}/messages/{message_id}</strong> <span class="badge">Requires Auth</span><br>
+                Edit a message in the conversation
+                <div class="example">
+                    <strong>Request:</strong>
+                    <pre>{ "content": "I am feeling better now" }</pre>
+                </div>
+            </div>
+
+            <div class="endpoint">
+                <span class="method delete">DELETE</span><strong>/api/sessions/{session_id}/messages/{message_id}</strong> <span class="badge">Requires Auth</span><br>
+                Delete a message from the conversation
+            </div>
+        </section>
+
+        <section id="legacy" class="section">
+            <h2>🔄 Legacy Endpoints</h2>
+            <p style="margin-bottom: 20px;"><em>These endpoints are maintained for backward compatibility.</em></p>
+            
+            <div class="endpoint">
+                <span class="method post">POST</span><strong>/chat</strong><br>
+                Legacy chat endpoint - simple message/response
+                <div class="example">
+                    <strong>Request:</strong>
+                    <pre>{ "message": "Hello, I need someone to talk to", "session_id": "optional" }</pre>
+                </div>
+            </div>
+
+            <div class="endpoint">
+                <span class="method post">POST</span><strong>/consent</strong><br>
+                Set user consent for data storage
+                <div class="example">
+                    <strong>Request:</strong>
+                    <pre>{ "session_id": "session_uuid", "consent": true }</pre>
+                </div>
+            </div>
+
+            <div class="endpoint">
+                <span class="method post">POST</span><strong>/feedback</strong><br>
+                Submit feedback about a chat session
+                <div class="example">
+                    <strong>Request:</strong>
+                    <pre>{ "session_id": "session_uuid", "satisfaction": 4, "comments": "Very helpful!" }</pre>
+                </div>
+            </div>
+        </section>
+
+        <section class="section">
+            <h2>🧠 AI Features</h2>
+            <div class="grid">
+                <div class="endpoint">
+                    <h3>🎯 Intent Detection</h3>
+                    Automatically identifies the purpose of user messages (greeting, emotional support, crisis, etc.)
+                </div>
+                <div class="endpoint">
+                    <h3>😊 Sentiment Analysis</h3>
+                    Analyzes emotional tone of messages (positive, negative, neutral) to tailor responses
+                </div>
+                <div class="endpoint">
+                    <h3>🛡️ Safety Filtering</h3>
+                    Automatically detects and filters inappropriate content for user safety
+                </div>
+                <div class="endpoint">
+                    <h3>🆘 Crisis Detection</h3>
+                    Identifies potential crisis situations and provides immediate resources
+                </div>
+                <div class="endpoint">
+                    <h3>🧭 Domain Filtering</h3>
+                    Ensures conversations stay focused on mental health topics
+                </div>
+                <div class="endpoint">
+                    <h3>💡 Context Awareness</h3>
+                    Maintains conversation context for more natural, coherent responses
+                </div>
+            </div>
+        </section>
+
+        <section class="section">
+            <h2>⚡ Response Codes</h2>
+            <div class="grid">
+                <div class="endpoint">
+                    <span class="badge" style="background: #28a745;">200</span> <strong>Success</strong><br>
+                    Request completed successfully
+                </div>
+                <div class="endpoint">
+                    <span class="badge" style="background: #28a745;">201</span> <strong>Created</strong><br>
+                    Resource created successfully
+                </div>
+                <div class="endpoint">
+                    <span class="badge" style="background: #ffc107; color: #333;">400</span> <strong>Bad Request</strong><br>
+                    Invalid request data
+                </div>
+                <div class="endpoint">
+                    <span class="badge" style="background: #dc3545;">401</span> <strong>Unauthorized</strong><br>
+                    Missing or invalid authentication
+                </div>
+                <div class="endpoint">
+                    <span class="badge" style="background: #dc3545;">404</span> <strong>Not Found</strong><br>
+                    Resource not found
+                </div>
+                <div class="endpoint">
+                    <span class="badge" style="background: #dc3545;">500</span> <strong>Server Error</strong><br>
+                    Internal server error
+                </div>
+            </div>
+        </section>
+
+        <section class="section" style="text-align: center; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white;">
+            <h2 style="color: white; border-bottom: 2px solid rgba(255,255,255,0.3);">💙 Support Mental Health</h2>
+            <p style="font-size: 1.1em; margin: 20px 0;">This API is designed to provide accessible mental health support through AI-powered conversations.</p>
+            <p><strong>Remember:</strong> If you're in crisis, please reach out to professional help immediately.</p>
+            <div style="margin-top: 20px;">
+                <span class="badge" style="background: rgba(255,255,255,0.2);">Confidential</span>
+                <span class="badge" style="background: rgba(255,255,255,0.2);">Supportive</span>
+                <span class="badge" style="background: rgba(255,255,255,0.2);">Available 24/7</span>
+            </div>
+        </section>
+    </div>
+</body>
+</html>
+"""
+
+# ============================================================================
+# ROOT AND DOCUMENTATION ENDPOINTS
+# ============================================================================
+
+@app.route('/')
+def index():
+    """API Root - JSON response with navigation"""
+    return jsonify({
+        "name": "NeuralEase Mental Health Chatbot API",
+        "version": "1.0.0",
+        "status": "operational",
+        "description": "A mental health support chatbot API with user authentication and session management",
+        "documentation": {
+            "interactive_docs": "/docs",
+            "health_check": "/health",
+            "api_status": "/status"
+        },
+        "endpoints": {
+            "authentication": {
+                "register": "POST /api/auth/register",
+                "login": "POST /api/auth/login", 
+                "logout": "POST /api/auth/logout",
+                "refresh_token": "POST /api/auth/refresh"
+            },
+            "user_profile": {
+                "get_profile": "GET /api/user/profile",
+                "update_profile": "PUT /api/user/profile"
+            },
+            "sessions": {
+                "get_all_sessions": "GET /api/sessions",
+                "create_session": "POST /api/sessions",
+                "get_session": "GET /api/sessions/{session_id}",
+                "update_session": "PUT /api/sessions/{session_id}",
+                "delete_session": "DELETE /api/sessions/{session_id}"
+            },
+            "messaging": {
+                "send_message": "POST /api/sessions/{session_id}/messages",
+                "edit_message": "PUT /api/sessions/{session_id}/messages/{message_id}",
+                "delete_message": "DELETE /api/sessions/{session_id}/messages/{message_id}"
+            },
+            "legacy": {
+                "chat": "POST /chat",
+                "consent": "POST /consent",
+                "feedback": "POST /feedback"
+            }
+        },
+        "quick_start": [
+            "1. Register at /api/auth/register",
+            "2. Login at /api/auth/login",
+            "3. Create session at /api/sessions", 
+            "4. Start chatting at /api/sessions/{session_id}/messages"
+        ],
+        "crisis_resources": {
+            "us_suicide_lifeline": "988",
+            "crisis_text_line": "Text HOME to 741741",
+            "emergency": "911",
+            "international": "findahelpline.com"
+        }
+    })
+
+@app.route('/docs')
+def documentation():
+    """Interactive API Documentation"""
+    base_url = request.url_root.rstrip('/')
+    return render_template_string(DOCS_HTML, base_url=base_url)
+
+@app.route('/health')
+def health_check():
+    """Simple health check endpoint"""
+    return jsonify({
+        "status": "healthy",
+        "timestamp": datetime.now().isoformat(),
+        "components": {
+            "nlp_processor": "available" if nlp_processor else "unavailable",
+            "response_generator": "available" if response_generator else "unavailable",
+            "safety_checker": "available" if safety_checker else "unavailable",
+            "mental_health_filter": "available" if mental_health_filter else "unavailable"
+        }
+    })
+
+@app.route('/status')
+def get_status():
+    """Get API status and component health"""
+    status = {
+        "status": "operational",
+        "timestamp": datetime.now().isoformat(),
+        "version": "1.0.0",
+        "environment": os.environ.get('FLASK_ENV', 'production'),
+        "components": {
+            "nlp_processor": "available" if nlp_processor else "unavailable",
+            "response_generator": "available" if response_generator else "unavailable",
+            "safety_checker": "available" if safety_checker else "unavailable",
+            "mental_health_filter": "available" if mental_health_filter else "unavailable"
+        }
+    }
+    
+    if response_generator:
+        # Check AI API status
+        if hasattr(response_generator, 'gemini_api_key') and response_generator.gemini_api_key:
+            status["components"]["gemini_api"] = "configured"
+        else:
+            status["components"]["gemini_api"] = "not configured"
         
-        return status
+        if hasattr(response_generator, 'openai_client') and response_generator.openai_client:
+            status["components"]["openai_api"] = "available"
+        else:
+            status["components"]["openai_api"] = "unavailable"
+    
+    return status
 
 # ============================================================================
 # AUTHENTICATION ENDPOINTS
 # ============================================================================
 
-@auth_ns.route('/register')
-class Register(Resource):
-    @auth_ns.expect(auth_register_model)
-    @auth_ns.marshal_with(auth_response_model, code=201)
-    @auth_ns.response(400, 'Validation error')
-    @auth_ns.response(409, 'Username already exists')
-    @auth_ns.response(500, 'Server error')
-    def post(self):
-        """Register a new user account"""
-        try:
-            data = request.get_json()
-            username = data.get('username')
-            email = data.get('email')
-            password = data.get('password')
+@app.route('/api/auth/register', methods=['POST'])
+def register():
+    """Register a new user"""
+    try:
+        data = request.get_json()
+        username = data.get('username')
+        email = data.get('email')
+        password = data.get('password')
+        
+        if not username or not email or not password:
+            return jsonify({"error": "Username, email, and password are required"}), 400
             
-            if not username or not email or not password:
-                api.abort(400, "Username, email, and password are required")
-                
-            # Validate password strength
-            if len(password) < 8:
-                api.abort(400, "Password must be at least 8 characters long")
-                
-            # Create new user
-            user = User()
-            if not user.create_user(username, email, password):
-                api.abort(409, "Username already exists")
-                
-            # Generate authentication token
-            token = AuthToken.generate_token(user.user_id)
+        # Validate password strength
+        if len(password) < 8:
+            return jsonify({"error": "Password must be at least 8 characters long"}), 400
             
-            # Return token with user information
-            response = make_response(jsonify({
-                "message": "User registered successfully",
-                "user_id": user.user_id,
-                "username": user.username,
-                "email": user.email,
-                "token": token
-            }), 201)
+        # Create new user
+        user = User()
+        if not user.create_user(username, email, password):
+            return jsonify({"error": "Username already exists"}), 409
             
-            # Set token cookie
-            response.set_cookie(
-                'token', 
-                token, 
-                httponly=True, 
-                max_age=Config.TOKEN_EXPIRY_HOURS * 3600,
-                secure=Config.SECURE_COOKIES
-            )
-            
-            return response
-            
-        except Exception as e:
-            logging.error(f"Registration error: {str(e)}")
-            api.abort(500, f"Server error: {str(e)}")
-
-@auth_ns.route('/login')
-class Login(Resource):
-    @auth_ns.expect(auth_login_model)
-    @auth_ns.marshal_with(auth_response_model)
-    @auth_ns.response(400, 'Missing credentials')
-    @auth_ns.response(401, 'Invalid credentials')
-    @auth_ns.response(500, 'Server error')
-    def post(self):
-        """Login with username and password"""
-        try:
-            data = request.get_json()
-            username = data.get('username')
-            password = data.get('password')
-            
-            if not username or not password:
-                api.abort(400, "Username and password are required")
-                
-            # Authenticate user
-            user = User()
-            if not user.authenticate(username, password):
-                api.abort(401, "Invalid username or password")
-                
-            # Generate authentication token
-            token = AuthToken.generate_token(user.user_id)
-            
-            # Return token with user information
-            response = make_response(jsonify({
-                "message": "Login successful",
-                "user_id": user.user_id,
-                "username": user.username,
-                "email": user.email,
-                "token": token
-            }))
-            
-            # Set token cookie
-            response.set_cookie(
-                'token', 
-                token, 
-                httponly=True, 
-                max_age=Config.TOKEN_EXPIRY_HOURS * 3600,
-                secure=Config.SECURE_COOKIES
-            )
-            
-            return response
-            
-        except Exception as e:
-            logging.error(f"Login error: {str(e)}")
-            api.abort(500, f"Server error: {str(e)}")
-
-@auth_ns.route('/logout')
-class Logout(Resource):
-    @auth_ns.response(200, 'Logout successful')
-    def post(self):
-        """Logout user by clearing authentication token"""
-        response = make_response(jsonify({"message": "Logout successful"}))
-        response.delete_cookie('token')
-        return response
-
-@auth_ns.route('/refresh')
-class RefreshToken(Resource):
-    @auth_ns.marshal_with(auth_response_model)
-    @auth_ns.response(401, 'Invalid token')
-    @auth_ns.response(404, 'User not found')
-    @auth_ns.doc(security='Bearer')
-    @token_required
-    def post(self, user):
-        """Refresh authentication token"""
-        # Generate a new token
+        # Generate authentication token
         token = AuthToken.generate_token(user.user_id)
         
-        # Return new token
+        # Return token with user information
         response = make_response(jsonify({
-            "message": "Token refreshed",
+            "message": "User registered successfully",
+            "user_id": user.user_id,
+            "username": user.username,
+            "email": user.email,
             "token": token
         }))
         
@@ -478,403 +620,411 @@ class RefreshToken(Resource):
         )
         
         return response
+        
+    except Exception as e:
+        logging.error(f"Registration error: {str(e)}")
+        return jsonify({"error": f"Server error: {str(e)}"}), 500
+
+@app.route('/api/auth/login', methods=['POST'])
+def login():
+    """Login a user"""
+    try:
+        data = request.get_json()
+        username = data.get('username')
+        password = data.get('password')
+        
+        if not username or not password:
+            return jsonify({"error": "Username and password are required"}), 400
+            
+        # Authenticate user
+        user = User()
+        if not user.authenticate(username, password):
+            return jsonify({"error": "Invalid username or password"}), 401
+            
+        # Generate authentication token
+        token = AuthToken.generate_token(user.user_id)
+        
+        # Return token with user information
+        response = make_response(jsonify({
+            "message": "Login successful",
+            "user_id": user.user_id,
+            "username": user.username,
+            "email": user.email,
+            "token": token
+        }))
+        
+        # Set token cookie
+        response.set_cookie(
+            'token', 
+            token, 
+            httponly=True, 
+            max_age=Config.TOKEN_EXPIRY_HOURS * 3600,
+            secure=Config.SECURE_COOKIES
+        )
+        
+        return response
+        
+    except Exception as e:
+        logging.error(f"Login error: {str(e)}")
+        return jsonify({"error": f"Server error: {str(e)}"}), 500
+
+@app.route('/api/auth/logout', methods=['POST'])
+def logout():
+    """Logout a user by clearing the token cookie"""
+    response = make_response(jsonify({"message": "Logout successful"}))
+    response.delete_cookie('token')
+    return response
+
+@app.route('/api/auth/refresh', methods=['POST'])
+@token_required
+def refresh_token(user):
+    """Refresh authentication token"""
+    # Generate a new token
+    token = AuthToken.generate_token(user.user_id)
+    
+    # Return new token
+    response = make_response(jsonify({
+        "message": "Token refreshed",
+        "token": token
+    }))
+    
+    # Set token cookie
+    response.set_cookie(
+        'token', 
+        token, 
+        httponly=True, 
+        max_age=Config.TOKEN_EXPIRY_HOURS * 3600,
+        secure=Config.SECURE_COOKIES
+    )
+    
+    return response
 
 # ============================================================================
 # USER PROFILE ENDPOINTS
 # ============================================================================
 
-@user_ns.route('/profile')
-class UserProfile(Resource):
-    @user_ns.doc(security='Bearer')
-    @user_ns.response(200, 'User profile data')
-    @user_ns.response(401, 'Unauthorized')
-    @token_required
-    def get(self, user):
-        """Get user profile information"""
-        return {
-            "user_id": user.user_id,
-            "username": user.username,
-            "email": user.email,
-            "profile": user.profile,
-            "created_at": user.created_at,
-            "last_login": user.last_login
-        }
+@app.route('/api/user/profile', methods=['GET'])
+@token_required
+def get_profile(user):
+    """Get user profile"""
+    return jsonify({
+        "user_id": user.user_id,
+        "username": user.username,
+        "email": user.email,
+        "profile": user.profile,
+        "created_at": user.created_at,
+        "last_login": user.last_login
+    })
 
-    @user_ns.expect(profile_update_model)
-    @user_ns.doc(security='Bearer')
-    @user_ns.response(200, 'Profile updated successfully')
-    @user_ns.response(400, 'Invalid profile data')
-    @user_ns.response(401, 'Unauthorized')
-    @user_ns.response(500, 'Server error')
-    @token_required
-    def put(self, user):
-        """Update user profile information"""
-        try:
-            data = request.get_json()
-            profile_data = data.get('profile', {})
+@app.route('/api/user/profile', methods=['PUT'])
+@token_required
+def update_profile(user):
+    """Update user profile"""
+    try:
+        data = request.get_json()
+        profile_data = data.get('profile', {})
+        
+        # Update profile
+        if user.update_profile(profile_data):
+            return jsonify({
+                "message": "Profile updated successfully",
+                "profile": user.profile
+            })
+        else:
+            return jsonify({"error": "Failed to update profile"}), 500
             
-            # Update profile
-            if user.update_profile(profile_data):
-                return {
-                    "message": "Profile updated successfully",
-                    "profile": user.profile
-                }
-            else:
-                api.abort(500, "Failed to update profile")
-                
-        except Exception as e:
-            logging.error(f"Profile update error: {str(e)}")
-            api.abort(500, f"Server error: {str(e)}")
+    except Exception as e:
+        logging.error(f"Profile update error: {str(e)}")
+        return jsonify({"error": f"Server error: {str(e)}"}), 500
 
 # ============================================================================
 # CHAT SESSION MANAGEMENT ENDPOINTS
 # ============================================================================
 
-@sessions_ns.route('')
-class SessionsList(Resource):
-    @sessions_ns.doc(security='Bearer')
-    @sessions_ns.response(200, 'List of user sessions')
-    @sessions_ns.response(401, 'Unauthorized')
-    @token_required
-    def get(self, user):
-        """Get all chat sessions for the authenticated user"""
-        sessions = user.get_all_sessions()
-        return {
-            "sessions": sessions,
-            "count": len(sessions)
-        }
+@app.route('/api/sessions', methods=['GET'])
+@token_required
+def get_sessions(user):
+    """Get all chat sessions for a user"""
+    sessions = user.get_all_sessions()
+    return jsonify({
+        "sessions": sessions,
+        "count": len(sessions)
+    })
 
-    @sessions_ns.expect(session_create_model)
-    @sessions_ns.doc(security='Bearer')
-    @sessions_ns.response(201, 'Session created successfully')
-    @sessions_ns.response(401, 'Unauthorized')
-    @sessions_ns.response(500, 'Server error')
-    @token_required
-    def post(self, user):
-        """Create a new chat session"""
-        try:
-            data = request.get_json() or {}
-            title = data.get('title', 'New Conversation')
-            
-            # Create a new conversation
-            conversation = Conversation(Config.ENCRYPTION_KEY)
-            conversation.set_user_id(user.user_id)
-            conversation.set_title(title)
-            conversation.set_consent(True)  # Auto-consent for logged in users
-            
-            # Add welcome message
-            welcome_msg = f"Hello! I'm NeuralEase, a mental health support chatbot. How can I help you today?"
-            conversation.add_message("system", welcome_msg, {"source": "welcome", "model": "builtin"})
-            
-            # Save the conversation
-            conversation.save_session()
-            
-            # Add session to user's sessions
-            user.add_session(conversation.session_id)
-            
-            return {
-                "message": "Chat session created",
-                "session_id": conversation.session_id,
-                "title": conversation.title
-            }, 201
-            
-        except Exception as e:
-            logging.error(f"Session creation error: {str(e)}")
-            api.abort(500, f"Server error: {str(e)}")
+@app.route('/api/sessions', methods=['POST'])
+@token_required
+def create_session(user):
+    """Create a new chat session"""
+    try:
+        data = request.get_json()
+        title = data.get('title', 'New Conversation')
+        
+        # Create a new conversation
+        conversation = Conversation(Config.ENCRYPTION_KEY)
+        conversation.set_user_id(user.user_id)
+        conversation.set_title(title)
+        conversation.set_consent(True)  # Auto-consent for logged in users
+        
+        # Add welcome message
+        welcome_msg = f"Hello! I'm NeuralEase, a mental health support chatbot. How can I help you today?"
+        conversation.add_message("system", welcome_msg, {"source": "welcome", "model": "builtin"})
+        
+        # Save the conversation
+        conversation.save_session()
+        
+        # Add session to user's sessions
+        user.add_session(conversation.session_id)
+        
+        return jsonify({
+            "message": "Chat session created",
+            "session_id": conversation.session_id,
+            "title": conversation.title
+        })
+        
+    except Exception as e:
+        logging.error(f"Session creation error: {str(e)}")
+        return jsonify({"error": f"Server error: {str(e)}"}), 500
 
-@sessions_ns.route('/<string:session_id>')
-class Session(Resource):
-    @sessions_ns.doc(security='Bearer')
-    @sessions_ns.marshal_with(session_response_model)
-    @sessions_ns.response(200, 'Session data')
-    @sessions_ns.response(401, 'Unauthorized')
-    @sessions_ns.response(404, 'Session not found')
-    @sessions_ns.response(500, 'Server error')
-    @token_required
-    def get(self, user, session_id):
-        """Get detailed information about a specific chat session"""
-        try:
-            # Check if session belongs to user
-            if session_id not in user.sessions:
-                api.abort(404, "Session not found")
-                
-            # Load the session
-            conversation = Conversation(Config.ENCRYPTION_KEY)
-            if not conversation.load_session(session_id):
-                api.abort(500, "Failed to load session")
-                
-            # Return session data
-            return {
-                "session_id": conversation.session_id,
-                "title": conversation.title,
-                "created_at": conversation.created_at,
-                "last_interaction": conversation.last_interaction,
-                "messages": conversation.messages,
-                "user_profile": conversation.user_profile
-            }
+@app.route('/api/sessions/<session_id>', methods=['GET'])
+@token_required
+def get_session(user, session_id):
+    """Get a specific chat session"""
+    try:
+        # Check if session belongs to user
+        if session_id not in user.sessions:
+            return jsonify({"error": "Session not found"}), 404
             
-        except Exception as e:
-            logging.error(f"Get session error: {str(e)}")
-            api.abort(500, f"Server error: {str(e)}")
+        # Load the session
+        conversation = Conversation(Config.ENCRYPTION_KEY)
+        if not conversation.load_session(session_id):
+            return jsonify({"error": "Failed to load session"}), 500
+            
+        # Return session data
+        return jsonify({
+            "session_id": conversation.session_id,
+            "title": conversation.title,
+            "created_at": conversation.created_at,
+            "last_interaction": conversation.last_interaction,
+            "messages": conversation.messages,
+            "user_profile": conversation.user_profile
+        })
+        
+    except Exception as e:
+        logging.error(f"Get session error: {str(e)}")
+        return jsonify({"error": f"Server error: {str(e)}"}), 500
 
-    @sessions_ns.expect(session_update_model)
-    @sessions_ns.doc(security='Bearer')
-    @sessions_ns.response(200, 'Session updated successfully')
-    @sessions_ns.response(400, 'Invalid title')
-    @sessions_ns.response(401, 'Unauthorized')
-    @sessions_ns.response(404, 'Session not found')
-    @sessions_ns.response(500, 'Server error')
-    @token_required
-    def put(self, user, session_id):
-        """Update chat session (rename)"""
-        try:
-            # Check if session belongs to user
-            if session_id not in user.sessions:
-                api.abort(404, "Session not found")
-                
-            data = request.get_json()
-            title = data.get('title')
+@app.route('/api/sessions/<session_id>', methods=['PUT'])
+@token_required
+def update_session(user, session_id):
+    """Update a chat session (rename)"""
+    try:
+        # Check if session belongs to user
+        if session_id not in user.sessions:
+            return jsonify({"error": "Session not found"}), 404
             
-            if not title:
-                api.abort(400, "Title is required")
-                
-            # Load the session
-            conversation = Conversation(Config.ENCRYPTION_KEY)
-            if not conversation.load_session(session_id):
-                api.abort(500, "Failed to load session")
-                
-            # Update title
-            conversation.set_title(title)
-            conversation.save_session()
+        data = request.get_json()
+        title = data.get('title')
+        
+        if not title:
+            return jsonify({"error": "Title is required"}), 400
             
-            return {
-                "message": "Session updated",
-                "session_id": session_id,
-                "title": title
-            }
+        # Load the session
+        conversation = Conversation(Config.ENCRYPTION_KEY)
+        if not conversation.load_session(session_id):
+            return jsonify({"error": "Failed to load session"}), 500
             
-        except Exception as e:
-            logging.error(f"Update session error: {str(e)}")
-            api.abort(500, f"Server error: {str(e)}")
+        # Update title
+        conversation.set_title(title)
+        conversation.save_session()
+        
+        return jsonify({
+            "message": "Session updated",
+            "session_id": session_id,
+            "title": title
+        })
+        
+    except Exception as e:
+        logging.error(f"Update session error: {str(e)}")
+        return jsonify({"error": f"Server error: {str(e)}"}), 500
 
-    @sessions_ns.doc(security='Bearer')
-    @sessions_ns.response(200, 'Session deleted successfully')
-    @sessions_ns.response(401, 'Unauthorized')
-    @sessions_ns.response(404, 'Session not found')
-    @sessions_ns.response(500, 'Server error')
-    @token_required
-    def delete(self, user, session_id):
-        """Delete a chat session"""
-        try:
-            # Check if session belongs to user
-            if session_id not in user.sessions:
-                api.abort(404, "Session not found")
-                
-            # Load the session
-            conversation = Conversation(Config.ENCRYPTION_KEY)
-            if not conversation.load_session(session_id):
-                api.abort(500, "Failed to load session")
-                
-            # Mark as deleted
-            conversation.mark_deleted()
+@app.route('/api/sessions/<session_id>', methods=['DELETE'])
+@token_required
+def delete_session(user, session_id):
+    """Delete a chat session"""
+    try:
+        # Check if session belongs to user
+        if session_id not in user.sessions:
+            return jsonify({"error": "Session not found"}), 404
             
-            # Remove from user's sessions
-            user.remove_session(session_id)
+        # Load the session
+        conversation = Conversation(Config.ENCRYPTION_KEY)
+        if not conversation.load_session(session_id):
+            return jsonify({"error": "Failed to load session"}), 500
             
-            return {
-                "message": "Session deleted",
-                "session_id": session_id
-            }
-            
-        except Exception as e:
-            logging.error(f"Delete session error: {str(e)}")
-            api.abort(500, f"Server error: {str(e)}")
-
-@sessions_ns.route('/<string:session_id>/messages')
-class Messages(Resource):
-    @sessions_ns.expect(message_send_model)
-    @sessions_ns.marshal_with(message_response_model)
-    @sessions_ns.doc(security='Bearer')
-    @sessions_ns.response(200, 'Message sent successfully')
-    @sessions_ns.response(400, 'Invalid message')
-    @sessions_ns.response(401, 'Unauthorized')
-    @sessions_ns.response(404, 'Session not found')
-    @sessions_ns.response(500, 'Server error')
-    @token_required
-    def post(self, user, session_id):
-        """Send a message to a chat session"""
-        # Use async_to_sync to run the async function properly
-        return async_to_sync(_async_send_message)(user, session_id)
-
-@sessions_ns.route('/<string:session_id>/messages/<string:message_id>')
-class Message(Resource):
-    @sessions_ns.expect(message_edit_model)
-    @sessions_ns.doc(security='Bearer')
-    @sessions_ns.response(200, 'Message edited successfully')
-    @sessions_ns.response(400, 'Invalid content')
-    @sessions_ns.response(401, 'Unauthorized')
-    @sessions_ns.response(404, 'Session or message not found')
-    @sessions_ns.response(500, 'Server error')
-    @token_required
-    def put(self, user, session_id, message_id):
-        """Edit a message in a chat session"""
-        try:
-            # Check if session belongs to user
-            if session_id not in user.sessions:
-                api.abort(404, "Session not found")
-                
-            data = request.get_json()
-            new_content = data.get('content')
-            
-            if not new_content:
-                api.abort(400, "No content provided")
-                
-            # Load the session
-            conversation = Conversation(Config.ENCRYPTION_KEY)
-            if not conversation.load_session(session_id):
-                api.abort(500, "Failed to load session")
-                
-            # Edit the message
-            if not conversation.edit_message(message_id, new_content):
-                api.abort(404, "Message not found")
-                
-            # Save the session
-            conversation.save_session()
-            
-            return {
-                "message": "Message edited",
-                "session_id": session_id,
-                "message_id": message_id
-            }
-            
-        except Exception as e:
-            logging.error(f"Edit message error: {str(e)}")
-            api.abort(500, f"Server error: {str(e)}")
-
-    @sessions_ns.doc(security='Bearer')
-    @sessions_ns.response(200, 'Message deleted successfully')
-    @sessions_ns.response(401, 'Unauthorized')
-    @sessions_ns.response(404, 'Session or message not found')
-    @sessions_ns.response(500, 'Server error')
-    @token_required
-    def delete(self, user, session_id, message_id):
-        """Delete a message in a chat session"""
-        try:
-            # Check if session belongs to user
-            if session_id not in user.sessions:
-                api.abort(404, "Session not found")
-                
-            # Load the session
-            conversation = Conversation(Config.ENCRYPTION_KEY)
-            if not conversation.load_session(session_id):
-                api.abort(500, "Failed to load session")
-                
-            # Delete the message
-            if not conversation.delete_message(message_id):
-                api.abort(404, "Message not found")
-                
-            # Save the session
-            conversation.save_session()
-            
-            return {
-                "message": "Message deleted",
-                "session_id": session_id,
-                "message_id": message_id
-            }
-            
-        except Exception as e:
-            logging.error(f"Delete message error: {str(e)}")
-            api.abort(500, f"Server error: {str(e)}")
+        # Mark as deleted
+        conversation.mark_deleted()
+        
+        # Remove from user's sessions
+        user.remove_session(session_id)
+        
+        return jsonify({
+            "message": "Session deleted",
+            "session_id": session_id
+        })
+        
+    except Exception as e:
+        logging.error(f"Delete session error: {str(e)}")
+        return jsonify({"error": f"Server error: {str(e)}"}), 500
 
 # ============================================================================
-# LEGACY ENDPOINTS (Backward Compatibility) - WITH SWAGGER DOCS
+# MESSAGE MANAGEMENT ENDPOINTS
 # ============================================================================
 
-@legacy_ns.route('/consent')
-class ConsentEndpoint(Resource):
-    @legacy_ns.expect(consent_model)
-    @legacy_ns.doc('set_consent', description='Set user consent for data storage (legacy endpoint)')
-    @legacy_ns.response(200, 'Consent updated successfully')
-    @legacy_ns.response(400, 'Invalid session ID')
-    @legacy_ns.response(500, 'Server error')
-    def post(self):
-        """Set user consent for data storage"""
-        try:
-            data = request.get_json()
-            session_id = data.get('session_id', '')
-            consent = data.get('consent', False)
+@app.route('/api/sessions/<session_id>/messages', methods=['POST'])
+@token_required
+def send_message(user, session_id):
+    """Send a message to a chat session"""
+    # Use async_to_sync to run the async function properly
+    return async_to_sync(_async_send_message)(user, session_id)
+
+@app.route('/api/sessions/<session_id>/messages/<message_id>', methods=['PUT'])
+@token_required
+def edit_message(user, session_id, message_id):
+    """Edit a message in a chat session"""
+    try:
+        # Check if session belongs to user
+        if session_id not in user.sessions:
+            return jsonify({"error": "Session not found"}), 404
             
-            conversation = Conversation(Config.ENCRYPTION_KEY)
-            if session_id:
-                if not conversation.load_session(session_id):
-                    logging.warning(f"Invalid session ID: {session_id}")
-                    return {"error": "Invalid session ID", "session_id": session_id}, 400
-            else:
-                session_id = conversation.session_id
+        data = request.get_json()
+        new_content = data.get('content')
+        
+        if not new_content:
+            return jsonify({"error": "No content provided"}), 400
             
-            conversation.set_consent(consent)
-            conversation.save_session()
+        # Load the session
+        conversation = Conversation(Config.ENCRYPTION_KEY)
+        if not conversation.load_session(session_id):
+            return jsonify({"error": "Failed to load session"}), 500
             
-            logging.info(f"Audit: Consent set to {consent} for session {session_id}")
-            return {
-                "message": "Consent updated",
-                "session_id": session_id,
-                "consent": consent
-            }
-        except Exception as e:
-            logging.error(f"Consent endpoint error: {str(e)}")
-            return {"error": f"Server error: {str(e)}"}, 500
+        # Edit the message
+        if not conversation.edit_message(message_id, new_content):
+            return jsonify({"error": "Message not found"}), 404
+            
+        # Save the session
+        conversation.save_session()
+        
+        return jsonify({
+            "message": "Message edited",
+            "session_id": session_id,
+            "message_id": message_id
+        })
+        
+    except Exception as e:
+        logging.error(f"Edit message error: {str(e)}")
+        return jsonify({"error": f"Server error: {str(e)}"}), 500
 
-@legacy_ns.route('/feedback')
-class FeedbackEndpoint(Resource):
-    @legacy_ns.expect(feedback_model)
-    @legacy_ns.doc('submit_feedback', description='Submit feedback about a chat session')
-    @legacy_ns.response(200, 'Feedback recorded successfully')
-    @legacy_ns.response(400, 'Invalid feedback data')
-    @legacy_ns.response(500, 'Server error')
-    def post(self):
-        """Submit feedback about a chat session"""
-        try:
-            data = request.get_json()
-            session_id = data.get('session_id', '')
-            satisfaction = data.get('satisfaction', None)
-            comments = data.get('comments', '')
+@app.route('/api/sessions/<session_id>/messages/<message_id>', methods=['DELETE'])
+@token_required
+def delete_message(user, session_id, message_id):
+    """Delete a message in a chat session"""
+    try:
+        # Check if session belongs to user
+        if session_id not in user.sessions:
+            return jsonify({"error": "Session not found"}), 404
+            
+        # Load the session
+        conversation = Conversation(Config.ENCRYPTION_KEY)
+        if not conversation.load_session(session_id):
+            return jsonify({"error": "Failed to load session"}), 500
+            
+        # Delete the message
+        if not conversation.delete_message(message_id):
+            return jsonify({"error": "Message not found"}), 404
+            
+        # Save the session
+        conversation.save_session()
+        
+        return jsonify({
+            "message": "Message deleted",
+            "session_id": session_id,
+            "message_id": message_id
+        })
+        
+    except Exception as e:
+        logging.error(f"Delete message error: {str(e)}")
+        return jsonify({"error": f"Server error: {str(e)}"}), 500
 
-            if not session_id or satisfaction is None:
-                logging.warning(f"Invalid feedback request: session_id={session_id}, satisfaction={satisfaction}")
-                return {"error": "Session ID and satisfaction score required"}, 400
+# ============================================================================
+# LEGACY ENDPOINTS (Backward Compatibility)
+# ============================================================================
 
-            if not isinstance(satisfaction, int) or satisfaction < 1 or satisfaction > 5:
-                logging.warning(f"Invalid satisfaction score: {satisfaction}")
-                return {"error": "Satisfaction must be an integer between 1 and 5"}, 400
-
-            conversation = Conversation(Config.ENCRYPTION_KEY)
+@app.route('/consent', methods=['POST'])
+def set_consent():
+    """Set user consent for data storage"""
+    try:
+        data = request.get_json()
+        session_id = data.get('session_id', '')
+        consent = data.get('consent', False)
+        
+        conversation = Conversation(Config.ENCRYPTION_KEY)
+        if session_id:
             if not conversation.load_session(session_id):
-                logging.warning(f"Invalid session ID for feedback: {session_id}")
-                return {"error": "Invalid session ID", "session_id": session_id}, 400
+                logging.warning(f"Invalid session ID: {session_id}")
+                return jsonify({"error": "Invalid session ID", "session_id": session_id}), 400
+        else:
+            session_id = conversation.session_id
+        
+        conversation.set_consent(consent)
+        conversation.save_session()
+        
+        logging.info(f"Audit: Consent set to {consent} for session {session_id}")
+        return jsonify({
+            "message": "Consent updated",
+            "session_id": session_id,
+            "consent": consent
+        })
+    except Exception as e:
+        logging.error(f"Consent endpoint error: {str(e)}")
+        return jsonify({"error": f"Server error: {str(e)}"}), 500
 
-            logging.info(f"Audit: Feedback received for session {session_id}: satisfaction={satisfaction}, comments={comments}")
-            return {
-                "message": "Feedback recorded",
-                "session_id": session_id,
-                "satisfaction": satisfaction,
-                "comments": comments
-            }
-        except Exception as e:
-            logging.error(f"Feedback endpoint error: {str(e)}")
-            return {"error": f"Server error: {str(e)}"}, 500
+@app.route('/feedback', methods=['POST'])
+def submit_feedback():
+    """Submit feedback about a chat session"""
+    try:
+        data = request.get_json()
+        session_id = data.get('session_id', '')
+        satisfaction = data.get('satisfaction', None)
+        comments = data.get('comments', '')
 
-@legacy_ns.route('/chat')
-class ChatEndpoint(Resource):
-    @legacy_ns.expect(chat_legacy_model)
-    @legacy_ns.doc('legacy_chat', description='Legacy chat endpoint for backward compatibility')
-    @legacy_ns.response(200, 'Chat response')
-    @legacy_ns.response(400, 'Invalid input')
-    @legacy_ns.response(403, 'Consent required')
-    @legacy_ns.response(500, 'Server error')
-    def post(self):
-        """Legacy chat endpoint for backward compatibility"""
-        return async_to_sync(_async_chat)()
+        if not session_id or satisfaction is None:
+            logging.warning(f"Invalid feedback request: session_id={session_id}, satisfaction={satisfaction}")
+            return jsonify({"error": "Session ID and satisfaction score required"}), 400
+
+        if not isinstance(satisfaction, int) or satisfaction < 1 or satisfaction > 5:
+            logging.warning(f"Invalid satisfaction score: {satisfaction}")
+            return jsonify({"error": "Satisfaction must be an integer between 1 and 5"}), 400
+
+        conversation = Conversation(Config.ENCRYPTION_KEY)
+        if not conversation.load_session(session_id):
+            logging.warning(f"Invalid session ID for feedback: {session_id}")
+            return jsonify({"error": "Invalid session ID", "session_id": session_id}), 400
+
+        logging.info(f"Audit: Feedback received for session {session_id}: satisfaction={satisfaction}, comments={comments}")
+        return jsonify({
+            "message": "Feedback recorded",
+            "session_id": session_id,
+            "satisfaction": satisfaction,
+            "comments": comments
+        })
+    except Exception as e:
+        logging.error(f"Feedback endpoint error: {str(e)}")
+        return jsonify({"error": f"Server error: {str(e)}"}), 500
+
+@app.route('/chat', methods=['POST'])
+def chat():
+    """Legacy chat endpoint for backward compatibility"""
+    return async_to_sync(_async_chat)()
 
 # ============================================================================
 # ASYNC IMPLEMENTATION FUNCTIONS
@@ -1170,13 +1320,13 @@ if __name__ == '__main__':
     print(f"🚀 Starting Mental Health Chatbot on port {port}")
     print(f"💚 Health check available at: http://localhost:{port}/health")
     print(f"📊 Status check available at: http://localhost:{port}/status")
-    print(f"📋 Swagger Documentation available at: http://localhost:{port}/docs")
+    print(f"📋 API Documentation available at: http://localhost:{port}/docs")
     print(f"🌐 API Root: http://localhost:{port}/")
     print(f"")
     print(f"🎯 Quick Test URLs:")
     print(f"   - API Info: http://localhost:{port}/")
-    print(f"   - Interactive Docs: http://localhost:{port}/docs")
+    print(f"   - Documentation: http://localhost:{port}/docs")
     print(f"   - Health: http://localhost:{port}/health")
     
     # Bind to 0.0.0.0 for Render (not just localhost)
-    app.run(host='0.0.0.0', port=port, debug=True)  # Set debug=True for local development
+    app.run(host='0.0.0.0', port=port, debug=False)
