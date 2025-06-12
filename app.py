@@ -58,9 +58,7 @@ except Exception as e:
     safety_checker = None
     mental_health_filter = None
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-logging.info(f"Device set to use {device}")
-logging.info("Mental Health Chatbot starting up with enhanced user features")
+
 
 # Authentication decorator
 def token_required(f):
