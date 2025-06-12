@@ -11,7 +11,7 @@ from modules.user_auth import User, AuthToken
 from config import Config
 import logging
 from datetime import datetime
-import torch
+
 from asgiref.wsgi import WsgiToAsgi
 from asgiref.sync import async_to_sync
 from functools import wraps
