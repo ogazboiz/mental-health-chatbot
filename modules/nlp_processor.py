@@ -2,7 +2,6 @@ import os
 import json
 import asyncio
 from typing import Dict, List, Any
-from transformers import pipeline
 import re
 import logging
 import httpx
@@ -21,20 +20,20 @@ class NLPProcessor:
         self.greeting_keywords = ["hi", "hello", "hey", "good morning", "good evening", "good afternoon", "good night"]
         self.rake = Rake()
         
-        # FIXED: Use the correct API key for Hugging Face
-        self.hf_api_key = Config.HF_API_KEY  # This was the major bug!
+        # Use the correct API key for Hugging Face
+        self.hf_api_key = Config.HF_API_KEY
         
         # API endpoints
         self.hf_sentiment_url = "https://api-inference.huggingface.co/models/nlptown/bert-base-multilingual-uncased-sentiment"
         self.hf_emotion_url = "https://api-inference.huggingface.co/models/bhadresh-savani/distilbert-base-uncased-emotion"
         
         # Confidence thresholds for classification
-        self.EMOTION_CONFIDENCE_THRESHOLD = 0.5  # Lowered from 0.6 to catch more emotions
-        self.SENTIMENT_CONFIDENCE_THRESHOLD = 0.4  # Threshold for sentiment
+        self.EMOTION_CONFIDENCE_THRESHOLD = 0.5
+        self.SENTIMENT_CONFIDENCE_THRESHOLD = 0.4
         
-        # Lazy-loaded local models (only initialized if API fails)
-        self.sentiment_classifier = None
-        self.emotion_classifier = None
+        # MEMORY OPTIMIZATION: Remove heavy transformers models - use API-only approach
+        # self.sentiment_classifier = None  # ← REMOVED to save memory
+        # self.emotion_classifier = None    # ← REMOVED to save memory
         
         # Fallback rule-based analyzers
         self._init_rule_based_analyzers()
@@ -42,10 +41,11 @@ class NLPProcessor:
         # Test API key on initialization
         if self.hf_api_key:
             logging.info(f"NLP Processor initialized with HF API key: {self.hf_api_key[:10]}...")
+            logging.info("MEMORY OPTIMIZED: Using API-only approach (no local models)")
         else:
             logging.warning("No Hugging Face API key found! Will use rule-based fallbacks only.")
         
-        logging.info("NLP Processor initialized with confidence thresholds for emotion and sentiment")
+        logging.info("NLP Processor initialized in memory-optimized mode")
         
     def _init_rule_based_analyzers(self):
         """Initialize rule-based analyzers for fallback"""
@@ -74,48 +74,27 @@ class NLPProcessor:
                     endpoint,
                     json={"inputs": text},
                     headers=headers,
-                    timeout=15.0  # Increased timeout
+                    timeout=15.0
                 )
-                response.raise_for_status()  # This will raise an exception for HTTP errors
+                response.raise_for_status()
                 result = response.json()
                 logging.debug(f"HF API response received: {str(result)[:200]}...")
                 return result
             except Exception as e:
                 logging.error(f"Hugging Face API error for {endpoint}: {str(e)}")
-                raise  # Re-raise to trigger fallback
+                raise
     
-    def _init_local_models(self):
-        """Initialize local models as fallback (only when needed)"""
-        if self.sentiment_classifier is not None and self.emotion_classifier is not None:
-            return True  # Models already initialized
-            
-        logging.info("Initializing local sentiment and emotion models...")
-        try:
-            self.sentiment_classifier = pipeline(
-                "sentiment-analysis",
-                model="nlptown/bert-base-multilingual-uncased-sentiment",
-                top_k=None
-            )
-            self.emotion_classifier = pipeline(
-                "text-classification",
-                model="bhadresh-savani/distilbert-base-uncased-emotion",
-                top_k=None
-            )
-            logging.info("Successfully loaded local sentiment and emotion models")
-            return True
-        except Exception as e:
-            logging.error(f"Failed to load local models: {str(e)}")
-            return False
+    # MEMORY OPTIMIZATION: Removed _init_local_models method to save memory
     
     async def analyze_text(self, text: str) -> Dict[str, Any]:
         """Analyze text for intent, sentiment, emotions, and other features"""
         text_lower = text.lower()
         logging.debug(f"Analyzing text: {text}")
         
-        # Intent classification (keyword-based, since intent model is unavailable)
+        # Intent classification (keyword-based)
         intent_map = {
             "LABEL_0": "greeting",
-            "LABEL_1": "seeking_information",
+            "LABEL_1": "seeking_information", 
             "LABEL_2": "emotional_support",
             "LABEL_3": "coping_strategies",
             "LABEL_4": "resources_request",
@@ -124,7 +103,7 @@ class NLPProcessor:
             "LABEL_7": "physical_symptom"
         }
         
-        # Default intent (personal story/general)
+        # Default intent
         intent = {"label": "LABEL_5", "confidence": 0.5, "intent": "general", "model_source": "keyword"}
         
         # Keyword-based intent detection
@@ -143,17 +122,15 @@ class NLPProcessor:
         elif any(s in text_lower for s in ["symptom", "pain", "headache", "tired", "exhausted", "nauseous"]):
             intent = {"label": "LABEL_7", "confidence": 0.8, "intent": "physical_symptom", "model_source": "keyword"}
             
-        # Sentiment classification - try API first, fall back to rule-based
+        # Sentiment classification - API first, then rule-based fallback
         sentiment = {"label": "neutral", "confidence": 0.5, "model_source": "default"}
         
-        # Try Hugging Face API first
         if self.hf_api_key:
             try:
                 logging.info("Attempting Hugging Face sentiment analysis...")
                 sentiment_result = await self._query_hf_api_async(text, self.hf_sentiment_url)
                 
                 if sentiment_result and isinstance(sentiment_result, list) and len(sentiment_result) > 0:
-                    # The format may be [[{dict1}, {dict2}]] or [{dict1}, {dict2}]
                     items = sentiment_result[0] if isinstance(sentiment_result[0], list) else sentiment_result
                     
                     if items and isinstance(items, list):
@@ -161,7 +138,6 @@ class NLPProcessor:
                         score = top_sentiment.get('score', 0)
                         label = top_sentiment.get('label', 'neutral')
                         
-                        # Apply confidence threshold for sentiment 
                         if score < self.SENTIMENT_CONFIDENCE_THRESHOLD:
                             sentiment = {
                                 "label": "neutral", 
@@ -170,7 +146,6 @@ class NLPProcessor:
                                 "raw_score": score,
                                 "model_source": "threshold_filter"
                             }
-                            logging.debug(f"Low confidence sentiment ({score:.4f}) set to neutral")
                         else:
                             sentiment = {
                                 "label": "negative" if label in ["1 star", "2 stars"] else 
@@ -179,17 +154,14 @@ class NLPProcessor:
                                 "raw_label": label,
                                 "model_source": "huggingface_api"
                             }
-                            logging.info(f"Sentiment detected via HF API: {sentiment['label']} ({sentiment['confidence']:.4f})")
                         
             except Exception as e:
                 logging.warning(f"HF API sentiment analysis failed: {str(e)}. Using rule-based fallback.")
-                # Rule-based fallback
                 sentiment = self._rule_based_sentiment(text_lower)
         else:
-            logging.info("No HF API key, using rule-based sentiment analysis")
             sentiment = self._rule_based_sentiment(text_lower)
         
-        # Override with keyword detection for certain terms regardless of model results
+        # Override with keyword detection
         if any(kw in text_lower for kw in self.grief_keywords):
             sentiment = {"label": "negative", "confidence": 0.9, "model_source": "keyword_grief"}
         elif any(kw in text_lower for kw in self.emotional_keywords):
@@ -199,24 +171,16 @@ class NLPProcessor:
         emotions = "none"
         emotion_source = "default"
         
-        # Try Hugging Face API first
         if self.hf_api_key:
             try:
                 logging.info("Attempting Hugging Face emotion analysis...")
                 emotion_results = await self._query_hf_api_async(text, self.hf_emotion_url)
                 
-                # Log raw response for debugging
-                logging.debug(f"Raw emotion API response: {emotion_results}")
-                
-                # Process with simpler approach matching known format
                 if emotion_results and isinstance(emotion_results, list) and len(emotion_results) > 0:
-                    # The format is [[{dict1}, {dict2}, ...]]
                     if len(emotion_results[0]) > 0:
-                        # Find emotion with highest score
                         top_emotion = max(emotion_results[0], key=lambda x: x.get('score', 0))
                         top_score = top_emotion.get('score', 0)
                         
-                        # Only use the emotion if the confidence is above a threshold
                         if top_score > self.EMOTION_CONFIDENCE_THRESHOLD:
                             emotions = top_emotion.get('label', 'none').lower()
                             emotion_source = "huggingface_api"
@@ -224,19 +188,16 @@ class NLPProcessor:
                         else:
                             emotions = "none"
                             emotion_source = "threshold_filter"
-                            logging.info(f"Low confidence emotion ({top_score:.4f}) set to none")
                     
             except Exception as e:
                 logging.warning(f"HF API emotion analysis failed: {str(e)}. Using rule-based fallback.")
-                # Rule-based fallback
                 emotions = self._rule_based_emotion(text_lower)
                 emotion_source = "rule_based"
         else:
-            logging.info("No HF API key, using rule-based emotion analysis")
             emotions = self._rule_based_emotion(text_lower)
             emotion_source = "rule_based"
         
-        # Override with keyword detection for certain emotional terms
+        # Override with keyword detection
         if any(kw in text_lower for kw in self.grief_keywords):
             emotions = "grief"
             emotion_source = "keyword_grief"
@@ -252,7 +213,7 @@ class NLPProcessor:
             
         # Keyword extraction
         self.rake.extract_keywords_from_text(text)
-        keywords = self.rake.get_ranked_phrases()[:5]  # Get top 5 keywords/phrases
+        keywords = self.rake.get_ranked_phrases()[:5]
         
         # Neuroscience terms detection
         detected_terms = [term for term in self.neuroscience_terms 
@@ -271,26 +232,23 @@ class NLPProcessor:
             "neuroscience_terms": detected_terms,
             "keywords": keywords,
             "is_question": is_question,
-            "entities": [],  # Placeholder for future named entity recognition
+            "entities": [],
             "processed_text": text,
             "is_neuroscience": bool(detected_terms),
-            "is_response_to": None  # Will be filled by the chat endpoint
+            "is_response_to": None
         }
         
         logging.info(f"Analysis result: intent={intent['intent']}, sentiment={sentiment['label']}, emotion={emotions}")
         return result
         
     def _rule_based_sentiment(self, text: str) -> Dict[str, Any]:
-        """Rule-based sentiment analysis as final fallback"""
-        # Create positive and negative word lists
+        """Rule-based sentiment analysis as fallback"""
         negative_words = self.grief_keywords + self.sadness_keywords + self.anxiety_keywords + self.anger_keywords
         positive_words = self.joy_keywords
         
-        # Count positive and negative words
         negative_count = sum(1 for word in negative_words if word in text)
         positive_count = sum(1 for word in positive_words if word in text)
         
-        # Calculate confidence based on word count difference
         if negative_count > positive_count:
             confidence = min(0.5 + (negative_count - positive_count) * 0.1, 0.9)
             return {"label": "negative", "confidence": confidence, "model_source": "rule_based"}
@@ -301,12 +259,10 @@ class NLPProcessor:
             return {"label": "neutral", "confidence": 0.6, "model_source": "rule_based"}
     
     def _rule_based_emotion(self, text: str) -> str:
-        """Rule-based emotion detection as final fallback"""
-        # Check for grief specifically (highest priority for mental health context)
+        """Rule-based emotion detection as fallback"""
         if any(kw in text for kw in self.grief_keywords):
             return "grief"
         
-        # Count different emotion types
         emotion_counts = {
             "sadness": sum(1 for word in self.sadness_keywords if word in text),
             "fear": sum(1 for word in self.anxiety_keywords if word in text),
@@ -314,11 +270,9 @@ class NLPProcessor:
             "joy": sum(1 for word in self.joy_keywords if word in text)
         }
         
-        # Get the emotion with the highest count
         if any(emotion_counts.values()):
             dominant_emotion = max(emotion_counts.items(), key=lambda x: x[1])
             if dominant_emotion[1] > 0:
                 return dominant_emotion[0]
         
-        # Default if no clear emotion is detected
         return "none"
