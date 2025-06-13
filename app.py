@@ -2,6 +2,7 @@ import asyncio
 import os
 import time
 from flask import Flask, request, jsonify, make_response, render_template_string
+from flask_cors import CORS  # ADD THIS IMPORT
 from modules.conversation import Conversation
 from modules.mental_health_response_generator import MentalHealthResponseGenerator  
 from modules.nlp_processor import NLPProcessor
@@ -42,6 +43,95 @@ logging.getLogger('').addHandler(console_handler)
 
 app = Flask(__name__)
 
+# ============================================================================
+# CORS CONFIGURATION - ADD THIS SECTION
+# ============================================================================
+
+# Get environment variables for CORS origins
+FRONTEND_URL = os.environ.get('FRONTEND_URL', 'https://uyi-mental-health-v1.vercel.app')
+RENDER_URL = os.environ.get('RENDER_EXTERNAL_URL', '')  # Render sets this automatically
+
+# Build origins list dynamically
+cors_origins = [
+    # Local development
+    "http://localhost:3000",
+    "http://localhost:8080", 
+    "http://127.0.0.1:5173",
+    "http://127.0.0.1:5000",
+    "http://localhost:5000",
+    # Production frontends
+    "https://uyi-mental-health-v1.vercel.app",  # Fixed: removed space and trailing slash
+    FRONTEND_URL,  # Environment variable
+]
+
+# Add Render URL if available
+if RENDER_URL:
+    cors_origins.append(RENDER_URL)
+    cors_origins.append(RENDER_URL.rstrip('/'))  # Also add without trailing slash
+
+# Remove duplicates and empty strings
+cors_origins = list(set(filter(None, cors_origins)))
+
+print(f"🔗 CORS Origins configured: {cors_origins}")
+
+# Configure CORS with better settings
+CORS(app, 
+    supports_credentials=True,
+    origins=cors_origins,
+    methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
+    allow_headers=[
+        "Content-Type", 
+        "Authorization", 
+        "X-Requested-With",
+        "Accept",
+        "Origin",
+        "Access-Control-Request-Method",
+        "Access-Control-Request-Headers"
+    ],
+    expose_headers=[
+        "Content-Type", 
+        "Authorization",
+        "Access-Control-Allow-Origin"
+    ],
+    max_age=86400,  # 24 hours cache
+    automatic_options=True,
+    send_wildcard=False
+)
+
+# Add a manual OPTIONS handler for better debugging
+@app.before_request
+def handle_preflight():
+    if request.method == "OPTIONS":
+        # Log CORS preflight requests for debugging
+        origin = request.headers.get('Origin')
+        logging.info(f"CORS preflight request from origin: {origin}")
+        
+        response = make_response()
+        response.headers.add("Access-Control-Allow-Origin", origin if origin in cors_origins else cors_origins[0])
+        response.headers.add('Access-Control-Allow-Headers', "Content-Type,Authorization,X-Requested-With,Accept,Origin")
+        response.headers.add('Access-Control-Allow-Methods', "GET,PUT,POST,DELETE,OPTIONS,PATCH")
+        response.headers.add('Access-Control-Allow-Credentials', 'true')
+        response.headers.add('Access-Control-Max-Age', '86400')
+        return response
+
+# Add CORS headers to all responses for extra safety
+@app.after_request
+def after_request(response):
+    origin = request.headers.get('Origin')
+    if origin and origin in cors_origins:
+        response.headers.add('Access-Control-Allow-Origin', origin)
+        response.headers.add('Access-Control-Allow-Credentials', 'true')
+        response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization,X-Requested-With,Accept,Origin')
+        response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS,PATCH')
+    
+    # Log response headers for debugging
+    logging.debug(f"Response headers: {dict(response.headers)}")
+    return response
+
+# ============================================================================
+# END CORS CONFIGURATION
+# ============================================================================
+
 # Initialize components
 print("Initializing chatbot components...")
 try:
@@ -57,8 +147,6 @@ except Exception as e:
     response_generator = None
     safety_checker = None
     mental_health_filter = None
-
-
 
 # Authentication decorator
 def token_required(f):
@@ -526,6 +614,29 @@ def documentation():
     """Interactive API Documentation"""
     base_url = request.url_root.rstrip('/')
     return render_template_string(DOCS_HTML, base_url=base_url)
+
+# ADD THESE CORS DEBUG ENDPOINTS
+@app.route('/cors-test', methods=['GET', 'OPTIONS'])
+def cors_test():
+    """Test endpoint to verify CORS configuration"""
+    return jsonify({
+        "message": "CORS is working!",
+        "origin": request.headers.get('Origin'),
+        "allowed_origins": cors_origins,
+        "method": request.method,
+        "timestamp": datetime.now().isoformat()
+    })
+
+@app.route('/cors-config')
+def cors_config():
+    """Debug endpoint to see CORS configuration"""
+    return jsonify({
+        "allowed_origins": cors_origins,
+        "frontend_url": FRONTEND_URL,
+        "render_url": RENDER_URL,
+        "request_origin": request.headers.get('Origin'),
+        "environment": os.environ.get('FLASK_ENV', 'production')
+    })
 
 @app.route('/health')
 def health_check():
@@ -1320,6 +1431,8 @@ if __name__ == '__main__':
     print(f"📊 Status check available at: http://localhost:{port}/status")
     print(f"📋 API Documentation available at: http://localhost:{port}/docs")
     print(f"🌐 API Root: http://localhost:{port}/")
+    print(f"🔧 CORS Test: http://localhost:{port}/cors-test")
+    print(f"🔧 CORS Config: http://localhost:{port}/cors-config")
     print(f"")
     print(f"🎯 Quick Test URLs:")
     print(f"   - API Info: http://localhost:{port}/")
