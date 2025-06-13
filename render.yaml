@@ -33,3 +33,7 @@ services:
         value: TRUE
       - key: USE_OPENAI_FALLBACK
         value: TRUE
+      - key: FRONTEND_URL
+        value: https://uyi-mental-health-v1.vercel.app
+      - key: FLASK_ENV
+        value: production
