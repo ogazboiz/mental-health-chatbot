@@ -2,7 +2,7 @@ import asyncio
 import os
 import time
 from flask import Flask, request, jsonify, make_response, render_template_string
-from flask_cors import CORS  # ADD THIS IMPORT
+from flask_cors import CORS, cross_origin
 from modules.conversation import Conversation
 from modules.mental_health_response_generator import MentalHealthResponseGenerator  
 from modules.nlp_processor import NLPProcessor
@@ -44,14 +44,14 @@ logging.getLogger('').addHandler(console_handler)
 app = Flask(__name__)
 
 # ============================================================================
-# CORS CONFIGURATION - ADD THIS SECTION
+# SIMPLIFIED CORS CONFIGURATION
 # ============================================================================
 
 # Get environment variables for CORS origins
 FRONTEND_URL = os.environ.get('FRONTEND_URL', 'https://uyi-mental-health-v1.vercel.app')
-RENDER_URL = os.environ.get('RENDER_EXTERNAL_URL', '')  # Render sets this automatically
+RENDER_URL = os.environ.get('RENDER_EXTERNAL_URL', '')
 
-# Build origins list dynamically
+# Build origins list
 cors_origins = [
     # Local development
     "http://localhost:3000",
@@ -59,78 +59,31 @@ cors_origins = [
     "http://127.0.0.1:5173",
     "http://127.0.0.1:5000",
     "http://localhost:5000",
-    # Production frontends
-    "https://uyi-mental-health-v1.vercel.app",  # Fixed: removed space and trailing slash
-    FRONTEND_URL,  # Environment variable
+    # Production
+    "https://uyi-mental-health-v1.vercel.app",
+    FRONTEND_URL,
 ]
 
 # Add Render URL if available
 if RENDER_URL:
     cors_origins.append(RENDER_URL)
-    cors_origins.append(RENDER_URL.rstrip('/'))  # Also add without trailing slash
+    cors_origins.append(RENDER_URL.rstrip('/'))
 
-# Remove duplicates and empty strings
+# Clean up origins list
 cors_origins = list(set(filter(None, cors_origins)))
 
 print(f"🔗 CORS Origins configured: {cors_origins}")
 
-# Configure CORS with better settings
+# Enable CORS for all routes with Flask-CORS extension
 CORS(app, 
-    supports_credentials=True,
-    origins=cors_origins,
-    methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
-    allow_headers=[
-        "Content-Type", 
-        "Authorization", 
-        "X-Requested-With",
-        "Accept",
-        "Origin",
-        "Access-Control-Request-Method",
-        "Access-Control-Request-Headers"
-    ],
-    expose_headers=[
-        "Content-Type", 
-        "Authorization",
-        "Access-Control-Allow-Origin"
-    ],
-    max_age=86400,  # 24 hours cache
-    automatic_options=True,
-    send_wildcard=False
-)
+     origins=cors_origins,
+     methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
+     allow_headers=["Content-Type", "Authorization", "X-Requested-With"],
+     supports_credentials=True,
+     automatic_options=True)
 
-# Add a manual OPTIONS handler for better debugging
-@app.before_request
-def handle_preflight():
-    if request.method == "OPTIONS":
-        # Log CORS preflight requests for debugging
-        origin = request.headers.get('Origin')
-        logging.info(f"CORS preflight request from origin: {origin}")
-        
-        response = make_response()
-        response.headers.add("Access-Control-Allow-Origin", origin if origin in cors_origins else cors_origins[0])
-        response.headers.add('Access-Control-Allow-Headers', "Content-Type,Authorization,X-Requested-With,Accept,Origin")
-        response.headers.add('Access-Control-Allow-Methods', "GET,PUT,POST,DELETE,OPTIONS,PATCH")
-        response.headers.add('Access-Control-Allow-Credentials', 'true')
-        response.headers.add('Access-Control-Max-Age', '86400')
-        return response
-
-# Add CORS headers to all responses for extra safety
-@app.after_request
-def after_request(response):
-    origin = request.headers.get('Origin')
-    if origin and origin in cors_origins:
-        response.headers.add('Access-Control-Allow-Origin', origin)
-        response.headers.add('Access-Control-Allow-Credentials', 'true')
-        response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization,X-Requested-With,Accept,Origin')
-        response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS,PATCH')
-    
-    # Log response headers for debugging
-    logging.debug(f"Response headers: {dict(response.headers)}")
-    return response
-
-# ============================================================================
-# END CORS CONFIGURATION
-# ============================================================================
+# Enable Flask-CORS debug logging
+logging.getLogger('flask_cors').level = logging.DEBUG
 
 # Initialize components
 print("Initializing chatbot components...")
@@ -554,6 +507,7 @@ DOCS_HTML = """
 # ============================================================================
 
 @app.route('/')
+@cross_origin()
 def index():
     """API Root - JSON response with navigation"""
     return jsonify({
@@ -610,13 +564,15 @@ def index():
     })
 
 @app.route('/docs')
+@cross_origin()
 def documentation():
     """Interactive API Documentation"""
     base_url = request.url_root.rstrip('/')
     return render_template_string(DOCS_HTML, base_url=base_url)
 
-# ADD THESE CORS DEBUG ENDPOINTS
+# CORS TEST ENDPOINTS
 @app.route('/cors-test', methods=['GET', 'OPTIONS'])
+@cross_origin()
 def cors_test():
     """Test endpoint to verify CORS configuration"""
     return jsonify({
@@ -628,6 +584,7 @@ def cors_test():
     })
 
 @app.route('/cors-config')
+@cross_origin()
 def cors_config():
     """Debug endpoint to see CORS configuration"""
     return jsonify({
@@ -639,6 +596,7 @@ def cors_config():
     })
 
 @app.route('/health')
+@cross_origin()
 def health_check():
     """Simple health check endpoint"""
     return jsonify({
@@ -653,6 +611,7 @@ def health_check():
     })
 
 @app.route('/status')
+@cross_origin()
 def get_status():
     """Get API status and component health"""
     status = {
@@ -687,6 +646,7 @@ def get_status():
 # ============================================================================
 
 @app.route('/api/auth/register', methods=['POST'])
+@cross_origin()
 def register():
     """Register a new user"""
     try:
@@ -735,6 +695,7 @@ def register():
         return jsonify({"error": f"Server error: {str(e)}"}), 500
 
 @app.route('/api/auth/login', methods=['POST'])
+@cross_origin()
 def login():
     """Login a user"""
     try:
@@ -778,6 +739,7 @@ def login():
         return jsonify({"error": f"Server error: {str(e)}"}), 500
 
 @app.route('/api/auth/logout', methods=['POST'])
+@cross_origin()
 def logout():
     """Logout a user by clearing the token cookie"""
     response = make_response(jsonify({"message": "Logout successful"}))
@@ -785,6 +747,7 @@ def logout():
     return response
 
 @app.route('/api/auth/refresh', methods=['POST'])
+@cross_origin()
 @token_required
 def refresh_token(user):
     """Refresh authentication token"""
@@ -813,6 +776,7 @@ def refresh_token(user):
 # ============================================================================
 
 @app.route('/api/user/profile', methods=['GET'])
+@cross_origin()
 @token_required
 def get_profile(user):
     """Get user profile"""
@@ -826,6 +790,7 @@ def get_profile(user):
     })
 
 @app.route('/api/user/profile', methods=['PUT'])
+@cross_origin()
 @token_required
 def update_profile(user):
     """Update user profile"""
@@ -851,6 +816,7 @@ def update_profile(user):
 # ============================================================================
 
 @app.route('/api/sessions', methods=['GET'])
+@cross_origin()
 @token_required
 def get_sessions(user):
     """Get all chat sessions for a user"""
@@ -861,6 +827,7 @@ def get_sessions(user):
     })
 
 @app.route('/api/sessions', methods=['POST'])
+@cross_origin()
 @token_required
 def create_session(user):
     """Create a new chat session"""
@@ -895,6 +862,7 @@ def create_session(user):
         return jsonify({"error": f"Server error: {str(e)}"}), 500
 
 @app.route('/api/sessions/<session_id>', methods=['GET'])
+@cross_origin()
 @token_required
 def get_session(user, session_id):
     """Get a specific chat session"""
@@ -923,6 +891,7 @@ def get_session(user, session_id):
         return jsonify({"error": f"Server error: {str(e)}"}), 500
 
 @app.route('/api/sessions/<session_id>', methods=['PUT'])
+@cross_origin()
 @token_required
 def update_session(user, session_id):
     """Update a chat session (rename)"""
@@ -957,6 +926,7 @@ def update_session(user, session_id):
         return jsonify({"error": f"Server error: {str(e)}"}), 500
 
 @app.route('/api/sessions/<session_id>', methods=['DELETE'])
+@cross_origin()
 @token_required
 def delete_session(user, session_id):
     """Delete a chat session"""
@@ -990,6 +960,7 @@ def delete_session(user, session_id):
 # ============================================================================
 
 @app.route('/api/sessions/<session_id>/messages', methods=['POST'])
+@cross_origin()
 @token_required
 def send_message(user, session_id):
     """Send a message to a chat session"""
@@ -997,6 +968,7 @@ def send_message(user, session_id):
     return async_to_sync(_async_send_message)(user, session_id)
 
 @app.route('/api/sessions/<session_id>/messages/<message_id>', methods=['PUT'])
+@cross_origin()
 @token_required
 def edit_message(user, session_id, message_id):
     """Edit a message in a chat session"""
@@ -1034,6 +1006,7 @@ def edit_message(user, session_id, message_id):
         return jsonify({"error": f"Server error: {str(e)}"}), 500
 
 @app.route('/api/sessions/<session_id>/messages/<message_id>', methods=['DELETE'])
+@cross_origin()
 @token_required
 def delete_message(user, session_id, message_id):
     """Delete a message in a chat session"""
@@ -1069,6 +1042,7 @@ def delete_message(user, session_id, message_id):
 # ============================================================================
 
 @app.route('/consent', methods=['POST'])
+@cross_origin()
 def set_consent():
     """Set user consent for data storage"""
     try:
@@ -1098,6 +1072,7 @@ def set_consent():
         return jsonify({"error": f"Server error: {str(e)}"}), 500
 
 @app.route('/feedback', methods=['POST'])
+@cross_origin()
 def submit_feedback():
     """Submit feedback about a chat session"""
     try:
@@ -1131,6 +1106,7 @@ def submit_feedback():
         return jsonify({"error": f"Server error: {str(e)}"}), 500
 
 @app.route('/chat', methods=['POST'])
+@cross_origin()
 def chat():
     """Legacy chat endpoint for backward compatibility"""
     return async_to_sync(_async_chat)()
