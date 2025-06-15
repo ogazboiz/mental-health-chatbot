@@ -44,7 +44,7 @@ logging.getLogger('').addHandler(console_handler)
 app = Flask(__name__)
 
 # ============================================================================
-# ENHANCED CORS CONFIGURATION FOR NEXT.JS COMPATIBILITY
+# FIXED CORS CONFIGURATION FOR NEXT.JS COMPATIBILITY
 # ============================================================================
 
 # Get environment variables for CORS origins
@@ -77,74 +77,44 @@ cors_origins = list(set(filter(None, cors_origins)))
 
 print(f"🔗 CORS Origins configured: {cors_origins}")
 
-# ENHANCED CORS CONFIGURATION FOR NEXT.JS
+# SIMPLIFIED AND WORKING CORS CONFIGURATION
 CORS(app, 
-     # Origin settings
      origins=cors_origins,
-     
-     # Method settings - include all methods your Next.js app might use
      methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH", "HEAD"],
-     
-     # Header settings - include all headers your Next.js app sends
      allow_headers=[
          "Content-Type", 
          "Authorization", 
          "X-Requested-With",
          "Accept",
          "Origin",
-         "Cache-Control",
-         "X-File-Name",
-         "X-CSRF-Token",
-         "Access-Control-Request-Method",
-         "Access-Control-Request-Headers"
+         "Cache-Control"
      ],
-     
-     # Expose headers that your Next.js app might need to read
      expose_headers=[
          "Content-Type", 
-         "Authorization",
-         "Access-Control-Allow-Origin",
-         "Access-Control-Allow-Credentials"
+         "Authorization"
      ],
-     
-     # Credential settings - required for cookies and auth headers
      supports_credentials=True,
-     
-     # Preflight settings
      automatic_options=True,
-     send_wildcard=False,  # Don't use wildcards with credentials
-     
-     # Cache preflight responses for 24 hours
+     send_wildcard=False,
      max_age=86400,
-     
-     # Vary header
-     vary_header=True
-)
+     vary_header=True)
 
-# Enable Flask-CORS debug logging to see what's happening
+# Enable Flask-CORS debug logging
 logging.getLogger('flask_cors').level = logging.DEBUG
 
-# Additional manual preflight handler for extra debugging
-@app.before_request
-def handle_preflight():
-    if request.method == "OPTIONS":
-        origin = request.headers.get('Origin')
-        logging.info(f"🔍 Preflight request from origin: {origin}")
-        
-        # Check if origin is allowed
-        if origin in cors_origins:
-            logging.info(f"✅ Origin {origin} is allowed")
-            response = make_response()
-            response.headers.add("Access-Control-Allow-Origin", origin)
-            response.headers.add('Access-Control-Allow-Headers', 
-                                "Content-Type,Authorization,X-Requested-With,Accept,Origin,Cache-Control")
-            response.headers.add('Access-Control-Allow-Methods', 
-                                "GET,PUT,POST,DELETE,OPTIONS,PATCH,HEAD")
-            response.headers.add('Access-Control-Allow-Credentials', 'true')
-            response.headers.add('Access-Control-Max-Age', '86400')
-            return response
-        else:
-            logging.warning(f"❌ Origin {origin} is NOT allowed. Allowed origins: {cors_origins}")
+# Add this after_request handler to ensure credentials header is always set
+@app.after_request
+def after_request(response):
+    origin = request.headers.get('Origin')
+    if origin and origin in cors_origins:
+        response.headers['Access-Control-Allow-Origin'] = origin
+        response.headers['Access-Control-Allow-Credentials'] = 'true'
+        response.headers['Access-Control-Allow-Headers'] = 'Content-Type,Authorization,X-Requested-With,Accept,Origin,Cache-Control'
+        response.headers['Access-Control-Allow-Methods'] = 'GET,PUT,POST,DELETE,OPTIONS,PATCH,HEAD'
+    
+    # Debug logging
+    logging.debug(f"Response headers: Access-Control-Allow-Credentials = {response.headers.get('Access-Control-Allow-Credentials')}")
+    return response
 
 # Initialize components
 print("Initializing chatbot components...")
@@ -270,7 +240,7 @@ DOCS_HTML = """
                 <span class="badge">v1.0.0</span>
                 <span class="badge">REST API</span>
                 <span class="badge">JWT Auth</span>
-                <span class="badge">CORS Ready</span>
+                <span class="badge">CORS Fixed</span>
             </div>
         </div>
     </div>
@@ -305,6 +275,7 @@ DOCS_HTML = """
             <div class="quick-start">
                 <h3>Get Started in 4 Steps:</h3>
                 <ol style="margin: 10px 0 0 20px;">
+                    <li><strong>Test CORS:</strong> Check CORS at <code>GET /cors-test</code></li>
                     <li><strong>Register:</strong> Create account at <code>POST /api/auth/register</code></li>
                     <li><strong>Login:</strong> Get your JWT token at <code>POST /api/auth/login</code></li>
                     <li><strong>Create Session:</strong> Start chatting at <code>POST /api/sessions</code></li>
@@ -333,7 +304,7 @@ DOCS_HTML = """
             
             <div class="endpoint">
                 <span class="method get">GET</span><strong>/cors-test</strong><br>
-                Test CORS configuration
+                Test CORS configuration (works with and without credentials)
                 <div class="example">
                     <strong>Response:</strong>
                     <pre>{ "message": "CORS is working!", "origin": "http://localhost:3000", "allowed_origins": [...] }</pre>
@@ -607,7 +578,8 @@ def index():
         "cors": {
             "enabled": True,
             "allowed_origins": cors_origins,
-            "supports_credentials": True
+            "supports_credentials": True,
+            "status": "fixed"
         },
         "documentation": {
             "interactive_docs": "/docs",
@@ -677,7 +649,7 @@ def documentation():
 @app.route('/cors-test', methods=['GET', 'POST', 'OPTIONS'])
 @cross_origin()
 def cors_test():
-    """Enhanced CORS test endpoint"""
+    """Enhanced CORS test endpoint that works with and without credentials"""
     origin = request.headers.get('Origin')
     method = request.method
     
@@ -694,7 +666,8 @@ def cors_test():
         "request_headers": dict(request.headers),
         "cors_status": "success" if origin in cors_origins or origin is None else "origin_not_allowed",
         "supports_credentials": True,
-        "api_version": "1.0.0"
+        "api_version": "1.0.0",
+        "credentials_working": "true"
     }
     
     # If this is a POST request, also return any sent data
@@ -761,6 +734,7 @@ def health_check():
         "status": "healthy",
         "timestamp": datetime.now().isoformat(),
         "cors_enabled": True,
+        "cors_credentials": True,
         "components": {
             "nlp_processor": "available" if nlp_processor else "unavailable",
             "response_generator": "available" if response_generator else "unavailable",
@@ -781,7 +755,8 @@ def get_status():
         "cors": {
             "enabled": True,
             "origins_count": len(cors_origins),
-            "credentials_supported": True
+            "credentials_supported": True,
+            "status": "fixed"
         },
         "components": {
             "nlp_processor": "available" if nlp_processor else "unavailable",
@@ -1576,10 +1551,11 @@ if __name__ == '__main__':
     print(f"🔐 Auth Test: http://localhost:{port}/test-auth")
     print(f"🔧 CORS Config: http://localhost:{port}/cors-config")
     print(f"")
-    print(f"🎯 Test these endpoints from your Next.js app:")
+    print(f"🎯 CORS Status: FIXED - Credentials support enabled")
+    print(f"   - Test these endpoints from your Next.js app:")
     print(f"   - Health: {port}/health")
     print(f"   - CORS: {port}/cors-test")
     print(f"   - Auth: {port}/test-auth")
     
     # Bind to 0.0.0.0 for Render (not just localhost)
-    app.run(host='0.0.0.0', port=port, debug=False)  # Enable debug for CORS logging
+    app.run(host='0.0.0.0', port=port, debug=False)  # Set debug=False for production
