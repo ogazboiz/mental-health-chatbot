@@ -44,22 +44,25 @@ logging.getLogger('').addHandler(console_handler)
 app = Flask(__name__)
 
 # ============================================================================
-# SIMPLIFIED CORS CONFIGURATION
+# ENHANCED CORS CONFIGURATION FOR NEXT.JS COMPATIBILITY
 # ============================================================================
 
 # Get environment variables for CORS origins
 FRONTEND_URL = os.environ.get('FRONTEND_URL', 'https://uyi-mental-health-v1.vercel.app')
 RENDER_URL = os.environ.get('RENDER_EXTERNAL_URL', '')
 
-# Build origins list
+# Build origins list - be very explicit about localhost variations
 cors_origins = [
-    # Local development
+    # Local development - Next.js default ports
     "http://localhost:3000",
+    "http://127.0.0.1:3000", 
+    "http://localhost:3001",  # Alternative port
+    # API testing ports
+    "http://localhost:5000",
+    "http://127.0.0.1:5000",
     "http://localhost:8080", 
     "http://127.0.0.1:5173",
-    "http://127.0.0.1:5000",
-    "http://localhost:5000",
-    # Production
+    # Production URLs
     "https://uyi-mental-health-v1.vercel.app",
     FRONTEND_URL,
 ]
@@ -74,16 +77,74 @@ cors_origins = list(set(filter(None, cors_origins)))
 
 print(f"🔗 CORS Origins configured: {cors_origins}")
 
-# Enable CORS for all routes with Flask-CORS extension
+# ENHANCED CORS CONFIGURATION FOR NEXT.JS
 CORS(app, 
+     # Origin settings
      origins=cors_origins,
-     methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
-     allow_headers=["Content-Type", "Authorization", "X-Requested-With"],
+     
+     # Method settings - include all methods your Next.js app might use
+     methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH", "HEAD"],
+     
+     # Header settings - include all headers your Next.js app sends
+     allow_headers=[
+         "Content-Type", 
+         "Authorization", 
+         "X-Requested-With",
+         "Accept",
+         "Origin",
+         "Cache-Control",
+         "X-File-Name",
+         "X-CSRF-Token",
+         "Access-Control-Request-Method",
+         "Access-Control-Request-Headers"
+     ],
+     
+     # Expose headers that your Next.js app might need to read
+     expose_headers=[
+         "Content-Type", 
+         "Authorization",
+         "Access-Control-Allow-Origin",
+         "Access-Control-Allow-Credentials"
+     ],
+     
+     # Credential settings - required for cookies and auth headers
      supports_credentials=True,
-     automatic_options=True)
+     
+     # Preflight settings
+     automatic_options=True,
+     send_wildcard=False,  # Don't use wildcards with credentials
+     
+     # Cache preflight responses for 24 hours
+     max_age=86400,
+     
+     # Vary header
+     vary_header=True
+)
 
-# Enable Flask-CORS debug logging
+# Enable Flask-CORS debug logging to see what's happening
 logging.getLogger('flask_cors').level = logging.DEBUG
+
+# Additional manual preflight handler for extra debugging
+@app.before_request
+def handle_preflight():
+    if request.method == "OPTIONS":
+        origin = request.headers.get('Origin')
+        logging.info(f"🔍 Preflight request from origin: {origin}")
+        
+        # Check if origin is allowed
+        if origin in cors_origins:
+            logging.info(f"✅ Origin {origin} is allowed")
+            response = make_response()
+            response.headers.add("Access-Control-Allow-Origin", origin)
+            response.headers.add('Access-Control-Allow-Headers', 
+                                "Content-Type,Authorization,X-Requested-With,Accept,Origin,Cache-Control")
+            response.headers.add('Access-Control-Allow-Methods', 
+                                "GET,PUT,POST,DELETE,OPTIONS,PATCH,HEAD")
+            response.headers.add('Access-Control-Allow-Credentials', 'true')
+            response.headers.add('Access-Control-Max-Age', '86400')
+            return response
+        else:
+            logging.warning(f"❌ Origin {origin} is NOT allowed. Allowed origins: {cors_origins}")
 
 # Initialize components
 print("Initializing chatbot components...")
@@ -209,6 +270,7 @@ DOCS_HTML = """
                 <span class="badge">v1.0.0</span>
                 <span class="badge">REST API</span>
                 <span class="badge">JWT Auth</span>
+                <span class="badge">CORS Ready</span>
             </div>
         </div>
     </div>
@@ -220,7 +282,7 @@ DOCS_HTML = """
                 <li><a href="#auth">🔐 Authentication</a></li>
                 <li><a href="#sessions">💬 Sessions</a></li>
                 <li><a href="#messages">📝 Messages</a></li>
-                <li><a href="#legacy">🔄 Legacy</a></li>
+                <li><a href="#testing">🧪 Testing</a></li>
                 <li><a href="#crisis">🆘 Crisis</a></li>
             </ul>
         </div>
@@ -263,6 +325,33 @@ DOCS_HTML = """
                     <span class="method get">GET</span><strong>/status</strong><br>
                     Detailed system status
                 </div>
+            </div>
+        </section>
+
+        <section id="testing" class="section">
+            <h2>🧪 Testing Endpoints</h2>
+            
+            <div class="endpoint">
+                <span class="method get">GET</span><strong>/cors-test</strong><br>
+                Test CORS configuration
+                <div class="example">
+                    <strong>Response:</strong>
+                    <pre>{ "message": "CORS is working!", "origin": "http://localhost:3000", "allowed_origins": [...] }</pre>
+                </div>
+            </div>
+
+            <div class="endpoint">
+                <span class="method post">POST</span><strong>/test-auth</strong><br>
+                Test authentication flow
+                <div class="example">
+                    <strong>Request:</strong>
+                    <pre>{ "test": true, "message": "Testing auth" }</pre>
+                </div>
+            </div>
+
+            <div class="endpoint">
+                <span class="method get">GET</span><strong>/cors-config</strong><br>
+                View current CORS configuration
             </div>
         </section>
 
@@ -395,7 +484,7 @@ DOCS_HTML = """
             </div>
         </section>
 
-        <section id="legacy" class="section">
+        <section class="section">
             <h2>🔄 Legacy Endpoints</h2>
             <p style="margin-bottom: 20px;"><em>These endpoints are maintained for backward compatibility.</em></p>
             
@@ -515,10 +604,20 @@ def index():
         "version": "1.0.0",
         "status": "operational",
         "description": "A mental health support chatbot API with user authentication and session management",
+        "cors": {
+            "enabled": True,
+            "allowed_origins": cors_origins,
+            "supports_credentials": True
+        },
         "documentation": {
             "interactive_docs": "/docs",
             "health_check": "/health",
             "api_status": "/status"
+        },
+        "testing": {
+            "cors_test": "/cors-test",
+            "auth_test": "/test-auth",
+            "cors_config": "/cors-config"
         },
         "endpoints": {
             "authentication": {
@@ -550,10 +649,11 @@ def index():
             }
         },
         "quick_start": [
-            "1. Register at /api/auth/register",
-            "2. Login at /api/auth/login",
-            "3. Create session at /api/sessions", 
-            "4. Start chatting at /api/sessions/{session_id}/messages"
+            "1. Test CORS at /cors-test",
+            "2. Register at /api/auth/register",
+            "3. Login at /api/auth/login",
+            "4. Create session at /api/sessions", 
+            "5. Start chatting at /api/sessions/{session_id}/messages"
         ],
         "crisis_resources": {
             "us_suicide_lifeline": "988",
@@ -570,29 +670,87 @@ def documentation():
     base_url = request.url_root.rstrip('/')
     return render_template_string(DOCS_HTML, base_url=base_url)
 
-# CORS TEST ENDPOINTS
-@app.route('/cors-test', methods=['GET', 'OPTIONS'])
+# ============================================================================
+# ENHANCED TESTING ENDPOINTS
+# ============================================================================
+
+@app.route('/cors-test', methods=['GET', 'POST', 'OPTIONS'])
 @cross_origin()
 def cors_test():
-    """Test endpoint to verify CORS configuration"""
-    return jsonify({
+    """Enhanced CORS test endpoint"""
+    origin = request.headers.get('Origin')
+    method = request.method
+    
+    # Log the request for debugging
+    logging.info(f"CORS Test - Method: {method}, Origin: {origin}")
+    logging.info(f"Request headers: {dict(request.headers)}")
+    
+    response_data = {
         "message": "CORS is working!",
-        "origin": request.headers.get('Origin'),
+        "origin": origin,
+        "method": method,
         "allowed_origins": cors_origins,
-        "method": request.method,
-        "timestamp": datetime.now().isoformat()
-    })
+        "timestamp": datetime.now().isoformat(),
+        "request_headers": dict(request.headers),
+        "cors_status": "success" if origin in cors_origins or origin is None else "origin_not_allowed",
+        "supports_credentials": True,
+        "api_version": "1.0.0"
+    }
+    
+    # If this is a POST request, also return any sent data
+    if method == "POST" and request.is_json:
+        response_data["received_data"] = request.get_json()
+    
+    return jsonify(response_data)
+
+@app.route('/test-auth', methods=['POST', 'OPTIONS'])
+@cross_origin()
+def test_auth():
+    """Test endpoint for authentication flow"""
+    try:
+        data = request.get_json() or {}
+        return jsonify({
+            "message": "Auth test successful",
+            "received_data": data,
+            "origin": request.headers.get('Origin'),
+            "authorization": request.headers.get('Authorization'),
+            "content_type": request.headers.get('Content-Type'),
+            "timestamp": datetime.now().isoformat(),
+            "cors_working": True
+        })
+    except Exception as e:
+        return jsonify({
+            "error": str(e),
+            "message": "Auth test failed",
+            "timestamp": datetime.now().isoformat()
+        }), 400
 
 @app.route('/cors-config')
 @cross_origin()
 def cors_config():
     """Debug endpoint to see CORS configuration"""
     return jsonify({
-        "allowed_origins": cors_origins,
-        "frontend_url": FRONTEND_URL,
-        "render_url": RENDER_URL,
-        "request_origin": request.headers.get('Origin'),
-        "environment": os.environ.get('FLASK_ENV', 'production')
+        "cors_configuration": {
+            "allowed_origins": cors_origins,
+            "allowed_methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH", "HEAD"],
+            "allowed_headers": [
+                "Content-Type", "Authorization", "X-Requested-With",
+                "Accept", "Origin", "Cache-Control"
+            ],
+            "supports_credentials": True,
+            "max_age": 86400
+        },
+        "environment": {
+            "frontend_url": FRONTEND_URL,
+            "render_url": RENDER_URL,
+            "flask_env": os.environ.get('FLASK_ENV', 'production')
+        },
+        "request_info": {
+            "origin": request.headers.get('Origin'),
+            "user_agent": request.headers.get('User-Agent'),
+            "host": request.headers.get('Host')
+        },
+        "timestamp": datetime.now().isoformat()
     })
 
 @app.route('/health')
@@ -602,6 +760,7 @@ def health_check():
     return jsonify({
         "status": "healthy",
         "timestamp": datetime.now().isoformat(),
+        "cors_enabled": True,
         "components": {
             "nlp_processor": "available" if nlp_processor else "unavailable",
             "response_generator": "available" if response_generator else "unavailable",
@@ -619,6 +778,11 @@ def get_status():
         "timestamp": datetime.now().isoformat(),
         "version": "1.0.0",
         "environment": os.environ.get('FLASK_ENV', 'production'),
+        "cors": {
+            "enabled": True,
+            "origins_count": len(cors_origins),
+            "credentials_supported": True
+        },
         "components": {
             "nlp_processor": "available" if nlp_processor else "unavailable",
             "response_generator": "available" if response_generator else "unavailable",
@@ -1403,17 +1567,19 @@ if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))  # Default for local development
     
     print(f"🚀 Starting Mental Health Chatbot on port {port}")
-    print(f"💚 Health check available at: http://localhost:{port}/health")
-    print(f"📊 Status check available at: http://localhost:{port}/status")
-    print(f"📋 API Documentation available at: http://localhost:{port}/docs")
+    print(f"🔗 CORS Origins: {cors_origins}")
+    print(f"💚 Health check: http://localhost:{port}/health")
+    print(f"📊 Status check: http://localhost:{port}/status")
+    print(f"📋 Documentation: http://localhost:{port}/docs")
     print(f"🌐 API Root: http://localhost:{port}/")
-    print(f"🔧 CORS Test: http://localhost:{port}/cors-test")
+    print(f"🧪 CORS Test: http://localhost:{port}/cors-test")
+    print(f"🔐 Auth Test: http://localhost:{port}/test-auth")
     print(f"🔧 CORS Config: http://localhost:{port}/cors-config")
     print(f"")
-    print(f"🎯 Quick Test URLs:")
-    print(f"   - API Info: http://localhost:{port}/")
-    print(f"   - Documentation: http://localhost:{port}/docs")
-    print(f"   - Health: http://localhost:{port}/health")
+    print(f"🎯 Test these endpoints from your Next.js app:")
+    print(f"   - Health: {port}/health")
+    print(f"   - CORS: {port}/cors-test")
+    print(f"   - Auth: {port}/test-auth")
     
     # Bind to 0.0.0.0 for Render (not just localhost)
-    app.run(host='0.0.0.0', port=port, debug=False)
+    app.run(host='0.0.0.0', port=port, debug=True)  # Enable debug for CORS logging
