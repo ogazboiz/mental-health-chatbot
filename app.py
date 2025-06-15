@@ -1582,4 +1582,4 @@ if __name__ == '__main__':
     print(f"   - Auth: {port}/test-auth")
     
     # Bind to 0.0.0.0 for Render (not just localhost)
-    app.run(host='0.0.0.0', port=port, debug=True)  # Enable debug for CORS logging
+    app.run(host='0.0.0.0', port=port, debug=False)  # Enable debug for CORS logging
